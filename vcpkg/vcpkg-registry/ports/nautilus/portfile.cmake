@@ -17,6 +17,7 @@ vcpkg_from_github(
         SHA512 9f5aab18b0e171357d912130e3f28a3772f6264cb89a1ec330a9683793c4c2de66d4537cb31ff072ae5dca1cc6084dffe65b3beae891e54dbf4895b39dcbf829
 		PATCHES
 		0001-disable-ubsan-function-call-check.patch
+		0002-fix-ambiguous-val-overload.patch
 )
 
 set(ADDITIONAL_CMAKE_OPTIONS "")
