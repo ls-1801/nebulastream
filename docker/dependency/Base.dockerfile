@@ -30,7 +30,6 @@ RUN apt update -y && apt install \
     automake \
     autoconf \
     libtool \
-    linux-headers-$(uname -r) \
     -y
 
 # install llvm based toolchain
