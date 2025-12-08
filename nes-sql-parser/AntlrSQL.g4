@@ -528,6 +528,7 @@ INTEGER_VALUE
 FLOAT_LITERAL
     : DIGIT+ EXPONENT?
     | DECIMAL_DIGITS EXPONENT? {isValidDecimal()}?
+    | 'nan'
     ;
 
 
