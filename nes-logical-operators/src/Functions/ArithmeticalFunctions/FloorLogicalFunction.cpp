@@ -38,14 +38,14 @@ DataType FloorLogicalFunction::getDataType() const
     return dataType;
 };
 
-LogicalFunction FloorLogicalFunction::withDataType(const DataType& dataType) const
+FloorLogicalFunction FloorLogicalFunction::withDataType(const DataType& dataType) const
 {
     auto copy = *this;
     copy.dataType = dataType;
     return copy;
 };
 
-LogicalFunction FloorLogicalFunction::withInferredDataType(const Schema& schema) const
+FloorLogicalFunction FloorLogicalFunction::withInferredDataType(const Schema& schema) const
 {
     std::vector<LogicalFunction> newChildren;
     for (auto& child : getChildren())
@@ -60,7 +60,7 @@ std::vector<LogicalFunction> FloorLogicalFunction::getChildren() const
     return {child};
 };
 
-LogicalFunction FloorLogicalFunction::withChildren(const std::vector<LogicalFunction>& children) const
+FloorLogicalFunction FloorLogicalFunction::withChildren(const std::vector<LogicalFunction>& children) const
 {
     PRECONDITION(children.size() == 1, "FloorLogicalFunction requires exactly one child, but got {}", children.size());
     auto copy = *this;
@@ -73,7 +73,7 @@ std::string_view FloorLogicalFunction::getType() const
     return NAME;
 }
 
-bool FloorLogicalFunction::operator==(const LogicalFunctionConcept& rhs) const
+bool FloorLogicalFunction::operator==(const FloorLogicalFunction& rhs) const
 {
     if (const auto* other = dynamic_cast<const FloorLogicalFunction*>(&rhs))
     {

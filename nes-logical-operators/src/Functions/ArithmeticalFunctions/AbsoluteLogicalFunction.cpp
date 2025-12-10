@@ -40,14 +40,14 @@ DataType AbsoluteLogicalFunction::getDataType() const
     return dataType;
 };
 
-LogicalFunction AbsoluteLogicalFunction::withDataType(const DataType& dataType) const
+AbsoluteLogicalFunction AbsoluteLogicalFunction::withDataType(const DataType& dataType) const
 {
     auto copy = *this;
     copy.dataType = dataType;
     return copy;
 };
 
-LogicalFunction AbsoluteLogicalFunction::withInferredDataType(const Schema& schema) const
+AbsoluteLogicalFunction AbsoluteLogicalFunction::withInferredDataType(const Schema& schema) const
 {
     std::vector<LogicalFunction> newChildren;
     for (auto& child : getChildren())
@@ -62,7 +62,7 @@ std::vector<LogicalFunction> AbsoluteLogicalFunction::getChildren() const
     return {child};
 };
 
-LogicalFunction AbsoluteLogicalFunction::withChildren(const std::vector<LogicalFunction>& children) const
+AbsoluteLogicalFunction AbsoluteLogicalFunction::withChildren(const std::vector<LogicalFunction>& children) const
 {
     PRECONDITION(children.size() == 1, "AbsoluteLogicalFunction requires exactly one child, but got {}", children.size());
     auto copy = *this;
@@ -75,7 +75,7 @@ std::string_view AbsoluteLogicalFunction::getType() const
     return NAME;
 }
 
-bool AbsoluteLogicalFunction::operator==(const LogicalFunctionConcept& rhs) const
+bool AbsoluteLogicalFunction::operator==(const AbsoluteLogicalFunction& rhs) const
 {
     if (const auto* other = dynamic_cast<const AbsoluteLogicalFunction*>(&rhs))
     {

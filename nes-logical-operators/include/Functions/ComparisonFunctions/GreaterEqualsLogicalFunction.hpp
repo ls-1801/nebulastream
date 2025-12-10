@@ -1,5 +1,5 @@
 /*
-    Licensed under the Apache License, Version 2.0 (the "License");
+Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.
     You may obtain a copy of the License at
 
@@ -26,30 +26,33 @@
 
 namespace NES
 {
-class GreaterEqualsLogicalFunction final : public LogicalFunctionConcept
+class GreaterEqualsLogicalFunction final
 {
 public:
     static constexpr std::string_view NAME = "GreaterEquals";
 
     GreaterEqualsLogicalFunction(LogicalFunction left, LogicalFunction right);
 
-    [[nodiscard]] SerializableFunction serialize() const override;
-    [[nodiscard]] bool operator==(const LogicalFunctionConcept& rhs) const override;
+    [[nodiscard]] SerializableFunction serialize() const;
+    [[nodiscard]] bool operator==(const GreaterEqualsLogicalFunction& rhs) const;
 
-    [[nodiscard]] DataType getDataType() const override;
-    [[nodiscard]] LogicalFunction withDataType(const DataType& dataType) const override;
-    [[nodiscard]] LogicalFunction withInferredDataType(const Schema& schema) const override;
+    [[nodiscard]] DataType getDataType() const;
+    [[nodiscard]] GreaterEqualsLogicalFunction withDataType(const DataType& dataType) const;
+    [[nodiscard]] GreaterEqualsLogicalFunction withInferredDataType(const Schema& schema) const;
 
-    [[nodiscard]] std::vector<LogicalFunction> getChildren() const override;
-    [[nodiscard]] LogicalFunction withChildren(const std::vector<LogicalFunction>& children) const override;
+    [[nodiscard]] std::vector<LogicalFunction> getChildren() const;
+    [[nodiscard]] GreaterEqualsLogicalFunction withChildren(const std::vector<LogicalFunction>& children) const;
 
-    [[nodiscard]] std::string_view getType() const override;
-    [[nodiscard]] std::string explain(ExplainVerbosity verbosity) const override;
+    [[nodiscard]] std::string_view getType() const;
+    [[nodiscard]] std::string explain(ExplainVerbosity verbosity) const;
 
 private:
     LogicalFunction left, right;
     DataType dataType;
 };
+
+static_assert(LogicalFunctionConcept<GreaterEqualsLogicalFunction>);
+
 }
 
 FMT_OSTREAM(NES::GreaterEqualsLogicalFunction);

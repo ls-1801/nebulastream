@@ -37,14 +37,14 @@ DataType CeilLogicalFunction::getDataType() const
     return dataType;
 };
 
-LogicalFunction CeilLogicalFunction::withDataType(const DataType& dataType) const
+CeilLogicalFunction CeilLogicalFunction::withDataType(const DataType& dataType) const
 {
     auto copy = *this;
     copy.dataType = dataType;
     return copy;
 };
 
-LogicalFunction CeilLogicalFunction::withInferredDataType(const Schema& schema) const
+CeilLogicalFunction CeilLogicalFunction::withInferredDataType(const Schema& schema) const
 {
     std::vector<LogicalFunction> newChildren;
     for (auto& child : getChildren())
@@ -59,7 +59,7 @@ std::vector<LogicalFunction> CeilLogicalFunction::getChildren() const
     return {child};
 };
 
-LogicalFunction CeilLogicalFunction::withChildren(const std::vector<LogicalFunction>& children) const
+CeilLogicalFunction CeilLogicalFunction::withChildren(const std::vector<LogicalFunction>& children) const
 {
     PRECONDITION(children.size() == 1, "CeilLogicalFunction requires exactly one child, but got {}", children.size());
     auto copy = *this;
@@ -72,7 +72,7 @@ std::string_view CeilLogicalFunction::getType() const
     return NAME;
 }
 
-bool CeilLogicalFunction::operator==(const LogicalFunctionConcept& rhs) const
+bool CeilLogicalFunction::operator==(const CeilLogicalFunction& rhs) const
 {
     if (const auto* other = dynamic_cast<const CeilLogicalFunction*>(&rhs))
     {
