@@ -18,13 +18,7 @@ on:
 
 jobs:
   check-format:
-    runs-on: [ self-hosted, linux, Build ]
-    container:
-      image: nebulastream/nes-ci:${{ inputs.dev_image_tag }}
-      options: --user root
-      env:
-        GH_TOKEN: ${{ github.token }}
-        DISTANCE_MERGE_BASE: ${{ inputs.number_of_commits }}
+    runs-on: [ "ubuntu-24.04" ]
     permissions:
       issues: read
       contents: read
@@ -36,5 +30,16 @@ jobs:
         with:
           fetch-depth: ${{ steps.increment.outputs.result }}
           ref: ${{ inputs.head_sha }}
-      - name: Check Format
-        run: ./scripts/format.sh
+      - uses: ./.github/steps/prepare-github
+        with:
+          image_name: nebulastream/nes-ci:${{ inputs.dev_image_tag }}
+          ccache_key: format-check
+      - uses: ./.github/steps/run-in-container
+        name: Check Format
+        env:
+          DISTANCE_MERGE_BASE: ${{ inputs.number_of_commits }}
+        with:
+          image_name: nebulastream/nes-ci:${{ inputs.dev_image_tag }}
+          run: |
+            export DISTANCE_MERGE_BASE=${{ inputs.number_of_commits }}
+            ./scripts/format.sh
