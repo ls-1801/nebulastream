@@ -143,13 +143,18 @@ jobs:
     name: "Build Dev Images"
     needs: [ detect-dependency-changes, lock ]
     if: needs.detect-dependency-changes.outputs.build-dependency == 'true'
-    runs-on: [ self-hosted, linux, Build, "${{ matrix.arch }}", dep-builder ]
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         arch: [ x64, arm64 ]
         stdlib: [ 'libstdcxx', 'libcxx' ]
         sanitizer: [ 'address', 'thread', 'undefined', 'none' ]
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
         exclude:
           - arch: arm64
             stdlib: 'libstdcxx'
@@ -228,7 +233,7 @@ jobs:
     name: "Merge Dev Images"
     needs: [ build-dev-images, detect-dependency-changes ]
     if: needs.detect-dependency-changes.outputs.build-dependency == 'true'
-    runs-on: [ self-hosted, linux, Build, x64 ]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
