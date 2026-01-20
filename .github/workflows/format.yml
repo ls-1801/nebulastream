@@ -36,10 +36,9 @@ jobs:
           ccache_key: format-check
       - uses: ./.github/steps/run-in-container
         name: Check Format
-        env:
-          DISTANCE_MERGE_BASE: ${{ inputs.number_of_commits }}
         with:
           image_name: nebulastream/nes-ci:${{ inputs.dev_image_tag }}
           run: |
+            export CI=true
             export DISTANCE_MERGE_BASE=${{ inputs.number_of_commits }}
             ./scripts/format.sh
