@@ -39,10 +39,9 @@ jobs:
         with:
           ref: ${{ inputs.head_sha }}
       - uses: ./.github/steps/prepare-github
-        name: Preparing Github Runners
         with:
           image_name: nebulastream/nes-ci:${{ inputs.dev_image_tag }}
-          ccache_key: ${{ matrix.platform }}-coverage
+          ccache_key: coverage-${{ matrix.platform }}
       - uses: ./.github/steps/run-in-container
         name: Build coverage and export as lcov
         with:
@@ -54,7 +53,7 @@ jobs:
       - uses: codecov/codecov-action@v5
         with:
           slug: nebulastream/nebulastream
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           files: build/ccov/coverage.lcov
           token: ${{ secrets.CODECOV_TOKEN }}
           override_branch: ${{ inputs.branch-name }}

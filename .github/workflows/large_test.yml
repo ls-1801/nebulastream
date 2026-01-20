@@ -48,21 +48,15 @@ jobs:
         with:
           ref: ${{ inputs.head_sha }}
       - uses: ./.github/steps/prepare-github
-        name: Preparing Github Runners
         with:
           image_name: nebulastream/nes-development:${{ inputs.dev_image_tag }}-${{ matrix.stdlib }}-${{ matrix.sanitizer }}
-          ccache_key: ${{ matrix.arch }}-${{ matrix.build_type }}-${{matrix.sanitizer}}-${{matrix.stdlib}}-large
+          ccache_key: large-${{ matrix.arch }}-${{ matrix.build_type }}-${{matrix.sanitizer}}-${{matrix.stdlib}}
       - uses: ./.github/steps/run-in-container
-        name: Configure NebulaStream
+        name: Configure and Build NebulaStream
         with:
           image_name: nebulastream/nes-development:${{ inputs.dev_image_tag }}-${{ matrix.stdlib }}-${{ matrix.sanitizer }}
           run: |
             cmake -GNinja -B build -DUSE_SANITIZER=${{ matrix.sanitizer }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DENABLE_LARGE_TESTS=ON -DNES_LOG_LEVEL=DEBUG
-      - uses: ./.github/steps/run-in-container
-        name: Build NebulaStream
-        with:
-          image_name: nebulastream/nes-development:${{ inputs.dev_image_tag }}-${{ matrix.stdlib }}-${{ matrix.sanitizer }}
-          run: |
             cmake --build build --target systest -j
       - uses: ./.github/steps/run-in-container
         name: Run large System Level Tests
@@ -86,7 +80,6 @@ jobs:
                 --worker.default_query_execution.page_size=${{ inputs.page_size }} \
                 --worker.default_query_execution.number_of_partitions=${{ inputs.number_of_partitions }} \
                 --worker.number_of_buffers_in_global_buffer_manager=200000
-
       - name: Upload Test Logs on Failure
         uses: actions/upload-artifact@v4
         if: failure() && !github.event.act
