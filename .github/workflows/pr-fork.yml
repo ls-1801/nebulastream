@@ -26,3 +26,10 @@ jobs:
       base_sha: ${{ github.event.pull_request.base.sha }}
       number_of_commits: ${{ github.event.pull_request.commits || -1 }}
     secrets: inherit
+
+  nix-build:
+    if: github.event.pull_request.head.repo.fork == true
+    name: "Run Nix Build"
+    uses: ./.github/workflows/nix-build.yml
+    with:
+      head_sha: ${{ github.event.pull_request.head.sha }}
