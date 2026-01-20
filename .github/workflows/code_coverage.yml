@@ -24,28 +24,32 @@ on:
 
 jobs:
   build-code-coverage-pr-branch:
-    container:
-      image: nebulastream/nes-ci:${{ inputs.dev_image_tag }}
-      volumes:
-        - ccache:/ccache
-      env:
-        CCACHE_DIR: /ccache
-      # TODO #401 Investigate rootless docker containers
-      options: --user root
     timeout-minutes: 90
-    runs-on: [ self-hosted, linux, Build, "${{matrix.platform}}" ]
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         platform: [ x64 ]
+        include:
+          - platform: x64
+            runner: [ "ubuntu-24.04" ]
     steps:
       - name: Checkout PR Branch
         uses: actions/checkout@v4
-      - name: Build coverage and export as lcov
-        run: |
-          cmake -DCODE_COVERAGE=ON -B build
-          cmake --build build -j -- -k 0
-          cmake --build build --target ccov-all-export
+        with:
+          ref: ${{ inputs.head_sha }}
+      - uses: ./.github/steps/prepare-github
+        with:
+          image_name: nebulastream/nes-ci:${{ inputs.dev_image_tag }}
+          ccache_key: coverage-${{ matrix.platform }}
+      - uses: ./.github/steps/run-in-container
+        name: Build coverage and export as lcov
+        with:
+          image_name: nebulastream/nes-ci:${{ inputs.dev_image_tag }}
+          run: |
+            cmake -DCODE_COVERAGE=ON -B build
+            cmake --build build -j -- -k 0
+            cmake --build build --target ccov-all-export
       - uses: codecov/codecov-action@v5
         with:
           slug: nebulastream/nebulastream
