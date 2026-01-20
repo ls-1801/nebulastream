@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   get-dev-images:
+    if: github.event.pull_request.head.repo.fork == false
     uses: ./.github/workflows/get_dev_images.yml
     secrets: inherit
     with:
@@ -22,6 +23,7 @@ jobs:
       head_sha: ${{ github.event.pull_request.head.sha }}
 
   smoke-tests:
+    if: github.event.pull_request.head.repo.fork == false
     needs: [ get-dev-images ]
     uses: ./.github/workflows/smoke-tests.yml
     with:
@@ -89,6 +91,7 @@ jobs:
     secrets: inherit
 
   nix-build:
+    if: github.event.pull_request.head.repo.fork == false
     needs: [ smoke-tests ]
     name: "Run Nix Build"
     uses: ./.github/workflows/nix-build.yml
