@@ -31,18 +31,8 @@ on:
 jobs:
   build-and-test-linux:
     name: "Run large scale tests on ${{matrix.arch}} with ${{matrix.stdlib}} in ${{ matrix.build_type }}"
-    container:
-      image: nebulastream/nes-development:${{ inputs.dev_image_tag }}-${{ matrix.stdlib }}-${{ matrix.sanitizer }}
-      volumes:
-        - ccache:/ccache
-        - test-file-cache:/test-file-cache
-      env:
-        CCACHE_DIR: /ccache
-        MOLD_JOBS: 1
-      # TODO #401 Investigate rootless docker containers
-      options: --user root
     timeout-minutes: 40
-    runs-on: [ self-hosted, linux, Build, "${{matrix.arch}}" ]
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -50,33 +40,52 @@ jobs:
         stdlib: [ 'libcxx' ]
         sanitizer: [ 'none' ]
         build_type: [ 'RelWithDebInfo', 'Release' ]
+        include:
+          - arch: x64
+            runner: [ "ubuntu-24.04" ]
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.head_sha }}
-      - name: Configure NebulaStream
-        run: cmake -GNinja -B build -DUSE_SANITIZER=${{ matrix.sanitizer }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DENABLE_LARGE_TESTS=ON -DExternalData_OBJECT_STORES=/test-file-cache -DNES_LOG_LEVEL=DEBUG
-      - name: Build NebulaStream
-        run: cmake --build build --target systest -j
-      - name: Run large System Level Tests
-        run: |
-          echo "Running all large tests with: "
-          echo " - NUMBER_OF_WORKER_THREADS: ${{ inputs.number_of_worker_threads }}"
-          echo " - BUFFER_SIZE: ${{ inputs.buffer_size }}"
-          echo " - PAGE_SIZE: ${{ inputs.page_size }}"
-          echo " - NUMBER_OF_PARTITIONS: ${{ inputs.number_of_partitions }}"    
+      - uses: ./.github/steps/prepare-github
+        name: Preparing Github Runners
+        with:
+          image_name: nebulastream/nes-development:${{ inputs.dev_image_tag }}-${{ matrix.stdlib }}-${{ matrix.sanitizer }}
+          ccache_key: ${{ matrix.arch }}-${{ matrix.build_type }}-${{matrix.sanitizer}}-${{matrix.stdlib}}-large
+      - uses: ./.github/steps/run-in-container
+        name: Configure NebulaStream
+        with:
+          image_name: nebulastream/nes-development:${{ inputs.dev_image_tag }}-${{ matrix.stdlib }}-${{ matrix.sanitizer }}
+          run: |
+            cmake -GNinja -B build -DUSE_SANITIZER=${{ matrix.sanitizer }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DENABLE_LARGE_TESTS=ON -DNES_LOG_LEVEL=DEBUG
+      - uses: ./.github/steps/run-in-container
+        name: Build NebulaStream
+        with:
+          image_name: nebulastream/nes-development:${{ inputs.dev_image_tag }}-${{ matrix.stdlib }}-${{ matrix.sanitizer }}
+          run: |
+            cmake --build build --target systest -j
+      - uses: ./.github/steps/run-in-container
+        name: Run large System Level Tests
+        with:
+          image_name: nebulastream/nes-development:${{ inputs.dev_image_tag }}-${{ matrix.stdlib }}-${{ matrix.sanitizer }}
+          run: |
+            echo "Running all large tests with: "
+            echo " - NUMBER_OF_WORKER_THREADS: ${{ inputs.number_of_worker_threads }}"
+            echo " - BUFFER_SIZE: ${{ inputs.buffer_size }}"
+            echo " - PAGE_SIZE: ${{ inputs.page_size }}"
+            echo " - NUMBER_OF_PARTITIONS: ${{ inputs.number_of_partitions }}"
 
-          build/nes-systests/systest/systest \
-              --workingDir=build/nes-systests/large_scale \
-              --data build/nes-systests/testdata \
-              --groups large \
-              -- \
-              --worker.default_query_execution.execution_mode=COMPILER \
-              --worker.query_engine.number_of_worker_threads=${{ inputs.number_of_worker_threads }} \
-              --worker.default_query_execution.operator_buffer_size=${{ inputs.buffer_size }} \
-              --worker.default_query_execution.page_size=${{ inputs.page_size }} \
-              --worker.default_query_execution.number_of_partitions=${{ inputs.number_of_partitions }} \
-              --worker.number_of_buffers_in_global_buffer_manager=200000
+            build/nes-systests/systest/systest \
+                --workingDir=build/nes-systests/large_scale \
+                --data build/nes-systests/testdata \
+                --groups large \
+                -- \
+                --worker.default_query_execution.execution_mode=COMPILER \
+                --worker.query_engine.number_of_worker_threads=${{ inputs.number_of_worker_threads }} \
+                --worker.default_query_execution.operator_buffer_size=${{ inputs.buffer_size }} \
+                --worker.default_query_execution.page_size=${{ inputs.page_size }} \
+                --worker.default_query_execution.number_of_partitions=${{ inputs.number_of_partitions }} \
+                --worker.number_of_buffers_in_global_buffer_manager=200000
 
       - name: Upload Test Logs on Failure
         uses: actions/upload-artifact@v4
