@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   get-dev-images:
+    if: github.event.pull_request.head.repo.fork == false
     uses: ./.github/workflows/get_dev_images.yml
     secrets: inherit
     with:
