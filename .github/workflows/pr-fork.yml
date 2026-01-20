@@ -1,27 +1,177 @@
 name: NES PR CI (Fork)
 description: |
-  This workflow is triggered for every pull request, however it is intended to be run from forks only, to give them 
-  additional permissions. Currently this includes only the clang-tidy-diff workflow which requires write permissions 
-  to add comments to the PR.
+  This workflow runs CI for pull requests from forks using GitHub-hosted runners.
+  It includes builds, tests, formatting checks, and clang-tidy analysis.
+
+  Security notes:
+  - Uses pull_request_target to allow write permissions for clang-tidy PR comments
+  - Code checkout uses the PR head SHA for accurate testing
+  - Docker images are pulled from public registry (nebulastream/nes-development)
+
+  Limitations:
+  - If a fork modifies dependency files (vcpkg/, docker/dependency/), new Docker images
+    would need to be built on self-hosted runners which aren't available for forks.
+    In this case, the workflow falls back to the 'latest' image tag from main branch.
+    This may cause build issues if dependency changes are incompatible.
+
 on:
   pull_request_target:
     types: [ synchronize, opened, reopened ]
 
-jobs:
-  get-dev-images:
-    if: github.event.pull_request.head.repo.fork == true
-    uses: ./.github/workflows/get_dev_images.yml
-    secrets: inherit
-    with:
-      branch-name: ${{ github.head_ref }}
-      head_sha: ${{ github.event.pull_request.head.sha }}
+# Cancel previous runs of the same PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
+jobs:
+  # Only run for fork PRs - non-fork PRs use the main pr.yml workflow
+  check-fork:
+    runs-on: ubuntu-latest
+    outputs:
+      is-fork: ${{ steps.check.outputs.is-fork }}
+    steps:
+      - id: check
+        run: |
+          if [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; then
+            echo "is-fork=true" >> $GITHUB_OUTPUT
+          else
+            echo "is-fork=false" >> $GITHUB_OUTPUT
+          fi
+
+  # Calculate dependency hash and check if image exists
+  # Falls back to 'latest' if specific version doesn't exist
+  get-image-tag:
+    needs: [ check-fork ]
+    if: needs.check-fork.outputs.is-fork == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Calculate dependency hash
+        id: hash
+        run: |
+          HASH=$(docker/dependency/hash_dependencies.sh)
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+          echo "Calculated dependency hash: $HASH"
+      - name: Check if image exists and resolve tag
+        id: resolve
+        run: |
+          HASH="${{ steps.hash.outputs.hash }}"
+
+          # Check if the hash-specific image exists on Docker Hub
+          RESPONSE_CODE=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            "https://hub.docker.com/v2/namespaces/nebulastream/repositories/nes-development/tags/${HASH}-libcxx-none")
+
+          if [ "$RESPONSE_CODE" -eq 200 ]; then
+            echo "Found image with hash: $HASH"
+            echo "tag=$HASH" >> $GITHUB_OUTPUT
+          else
+            echo "Image with hash $HASH not found (HTTP $RESPONSE_CODE), falling back to 'latest'"
+            echo "tag=latest" >> $GITHUB_OUTPUT
+          fi
+
+  # Format check using GitHub-hosted runners
+  check-format:
+    needs: [ check-fork, get-image-tag ]
+    if: needs.check-fork.outputs.is-fork == 'true'
+    name: "Format Check"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Include base commit
+        id: increment
+        run: echo "result=$((${{ github.event.pull_request.commits }} + 1))" >> $GITHUB_OUTPUT
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ steps.increment.outputs.result }}
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Pull Docker Image
+        run: docker pull nebulastream/nes-ci:${{ needs.get-image-tag.outputs.image-tag }}-libcxx-none
+      - name: Check Format
+        env:
+          DISTANCE_MERGE_BASE: ${{ github.event.pull_request.commits }}
+        run: |
+          docker run \
+            -v $(pwd):$(pwd) \
+            --workdir $(pwd) \
+            -e CI=true \
+            -e DISTANCE_MERGE_BASE=${{ github.event.pull_request.commits }} \
+            nebulastream/nes-ci:${{ needs.get-image-tag.outputs.image-tag }}-libcxx-none \
+            /usr/bin/bash -c './scripts/format.sh'
+
+  # Build and test on GitHub-hosted runners
+  # Simplified matrix for forks: no sanitizers, essential configurations only
+  build-and-test:
+    needs: [ check-fork, get-image-tag ]
+    if: needs.check-fork.outputs.is-fork == 'true'
+    name: "${{ matrix.arch }}-${{ matrix.stdlib }}-${{ matrix.build_type }} Build & Test"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [ x64, arm64 ]
+        stdlib: [ 'libcxx', 'libstdcxx' ]
+        build_type: [ 'RelWithDebInfo' ]
+        sanitizer: [ 'none' ]
+        include:
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+          - arch: x64
+            runner: ubuntu-24.04
+        exclude:
+          # arm64 builds only support libcxx
+          - arch: arm64
+            stdlib: 'libstdcxx'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: ./.github/steps/prepare-github
+        name: Prepare GitHub Runner
+        with:
+          image_name: nebulastream/nes-development:${{ needs.get-image-tag.outputs.image-tag }}-${{ matrix.stdlib }}-${{ matrix.sanitizer }}
+          ccache_key: fork-${{ matrix.arch }}-${{ matrix.build_type }}-${{ matrix.sanitizer }}-${{ matrix.stdlib }}
+      - uses: ./.github/steps/run-in-container
+        name: CMake Configure & Build
+        with:
+          image_name: nebulastream/nes-development:${{ needs.get-image-tag.outputs.image-tag }}-${{ matrix.stdlib }}-${{ matrix.sanitizer }}
+          run: |
+            source .github/.env/test-${{ matrix.sanitizer }}.env
+            cmake -GNinja -B build -DUSE_SANITIZER=${{ matrix.sanitizer }} -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DNES_LOG_LEVEL=DEBUG
+            cmake --build build -j -- -k 0
+      - uses: ./.github/steps/run-in-container
+        name: Run Tests
+        with:
+          image_name: nebulastream/nes-development:${{ needs.get-image-tag.outputs.image-tag }}-${{ matrix.stdlib }}-${{ matrix.sanitizer }}
+          run: |
+            source .github/.env/test-${{ matrix.sanitizer }}.env
+            # Timeout after 40 minutes - skip stress tests and long-running tests
+            ctest --test-dir build -j --output-on-failure --output-junit build/junit.xml --timeout 2400 -E "(Stress|Endless|Benchmark)" ${ADDITIONAL_CTEST_ARGS}
+      - name: Upload Test Logs on Failure
+        uses: actions/upload-artifact@v4
+        if: ${{ failure() && !cancelled() }}
+        with:
+          name: fork-logs-${{ matrix.arch }}-${{ matrix.stdlib }}-${{ matrix.sanitizer }}-${{ matrix.build_type }}
+          path: |
+            build/**/*.log
+            build/**/*.stats
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: fork-junit-${{ matrix.arch }}-${{ matrix.stdlib }}-${{ matrix.sanitizer }}-${{ matrix.build_type }}
+          path: build/junit.xml
+
+  # Clang-tidy diff analysis with PR comments
   clang-tidy-diff:
-    if: github.event.pull_request.head.repo.fork == true
-    needs: [ get-dev-images ]
+    needs: [ check-fork, get-image-tag ]
+    if: needs.check-fork.outputs.is-fork == 'true'
     uses: ./.github/workflows/clang_tidy_diff.yml
     with:
-      dev_image_tag: ${{ needs.get-dev-images.outputs.image-tag }}
+      dev_image_tag: ${{ needs.get-image-tag.outputs.image-tag }}
       head_sha: ${{ github.event.pull_request.head.sha }}
       base_sha: ${{ github.event.pull_request.base.sha }}
       number_of_commits: ${{ github.event.pull_request.commits || -1 }}
