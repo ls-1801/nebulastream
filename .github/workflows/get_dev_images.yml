@@ -131,6 +131,21 @@ jobs:
     steps:
       - run: echo "Acquired lock for ${{ needs.detect-dependency-changes.outputs.tag }}"
 
+  # Fail with a clear message if images need to be built on a fork (no self-hosted runners available)
+  check-images-exist-fork:
+    name: "Check Images Available (Fork)"
+    needs: [ detect-dependency-changes ]
+    if: needs.detect-dependency-changes.outputs.build-dependency == 'true' && github.event.pull_request.head.repo.fork == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if images need to be built on fork
+        run: |
+          echo "ERROR: Docker images with tag ${{ needs.detect-dependency-changes.outputs.tag }} do not exist in Docker Hub."
+          echo "Forks cannot build new images (requires self-hosted runners and Docker Hub credentials)."
+          echo "Please ensure that dependency images exist for the current vcpkg manifest hash."
+          echo "If you're contributing from a fork, please coordinate with maintainers to have images built."
+          exit 1
+
   build-dev-images:
     # We run the docker image build on separate machines and combine them into a single
     # multi-arch docker image in the docker-development-images job.
@@ -140,9 +155,10 @@ jobs:
     # CMake version
     # The Dependency Image contains a pre-built sdk based on the vcpkg manifest
     # The Development Image contains the dependencies and additional tooling like clang-format.
+    # NOTE: This job is disabled for forks - forks should use existing images.
     name: "Build Dev Images"
     needs: [ detect-dependency-changes, lock ]
-    if: needs.detect-dependency-changes.outputs.build-dependency == 'true'
+    if: needs.detect-dependency-changes.outputs.build-dependency == 'true' && github.event.pull_request.head.repo.fork != true
     runs-on: [ self-hosted, linux, Build, "${{ matrix.arch }}", dep-builder ]
     strategy:
       fail-fast: false
@@ -225,9 +241,10 @@ jobs:
           file: docker/dependency/Benchmark.dockerfile
   merge-dev-images:
     # This Job merges platform specific images into a single multi-platform image
+    # NOTE: This job is disabled for forks - forks should use existing images.
     name: "Merge Dev Images"
     needs: [ build-dev-images, detect-dependency-changes ]
-    if: needs.detect-dependency-changes.outputs.build-dependency == 'true'
+    if: needs.detect-dependency-changes.outputs.build-dependency == 'true' && github.event.pull_request.head.repo.fork != true
     runs-on: [ self-hosted, linux, Build, x64 ]
     steps:
       - uses: actions/checkout@v4
