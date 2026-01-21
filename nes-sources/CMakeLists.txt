@@ -13,8 +13,10 @@
 add_subdirectory(src)
 get_source(nes-sources NES_SOURCES_SOURCE_FILES)
 
+find_package(zstd CONFIG REQUIRED)
+
 add_library(nes-sources ${NES_SOURCES_SOURCE_FILES})
-target_link_libraries(nes-sources PUBLIC nes-common nes-configurations nes-memory nes-executable)
+target_link_libraries(nes-sources PUBLIC nes-common nes-configurations nes-memory nes-executable PRIVATE $<IF:$<TARGET_EXISTS:zstd::libzstd_shared>,zstd::libzstd_shared,zstd::libzstd_static>)
 
 target_include_directories(nes-sources PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
