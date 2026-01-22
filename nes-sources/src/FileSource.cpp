@@ -17,8 +17,10 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <ios>
 #include <istream>
 #include <memory>
@@ -33,6 +35,8 @@
 #include <Sources/Source.hpp>
 #include <Sources/SourceDescriptor.hpp>
 #include <Util/Files.hpp>
+#include <Util/URI.hpp>
+#include <Util/URLDownloader.hpp>
 #include <ErrorHandling.hpp>
 #include <FileDataRegistry.hpp>
 #include <InlineDataRegistry.hpp>
@@ -42,8 +46,51 @@
 namespace NES
 {
 
-FileSource::FileSource(const SourceDescriptor& sourceDescriptor) : filePath(sourceDescriptor.getFromConfig(ConfigParametersCSV::FILEPATH))
+namespace
 {
+bool isURL(const std::string& path)
+{
+    return path.starts_with("http://") || path.starts_with("https://");
+}
+
+std::filesystem::path getURLCachePath(const std::string& url)
+{
+    auto cacheDir = std::filesystem::temp_directory_path() / "nes_url_cache";
+    std::filesystem::create_directories(cacheDir);
+    return cacheDir / ("url_" + std::to_string(std::hash<std::string>{}(url)));
+}
+} // namespace
+
+FileSource::FileSource(const SourceDescriptor& sourceDescriptor)
+{
+    // Check if URL parameter is provided
+    auto urlOpt = sourceDescriptor.tryGetFromConfig(ConfigParametersCSV::URL);
+    if (urlOpt.has_value() && !urlOpt.value().empty())
+    {
+        auto url = urlOpt.value();
+        auto cachePath = getURLCachePath(url);
+
+        if (!std::filesystem::exists(cachePath))
+        {
+            URLDownloader::downloadToFile(URI(url), cachePath);
+        }
+        filePath = cachePath.string();
+    }
+    else
+    {
+        filePath = sourceDescriptor.getFromConfig(ConfigParametersCSV::FILEPATH);
+
+        // Check if file_path is actually a URL
+        if (isURL(filePath))
+        {
+            auto cachePath = getURLCachePath(filePath);
+            if (!std::filesystem::exists(cachePath))
+            {
+                URLDownloader::downloadToFile(URI(filePath), cachePath);
+            }
+            filePath = cachePath.string();
+        }
+    }
 }
 
 void FileSource::open(std::shared_ptr<AbstractBufferProvider>)

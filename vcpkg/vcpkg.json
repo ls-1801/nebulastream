@@ -46,7 +46,8 @@
     "scope-guard",
     "boost-url",
     "simdjson",
-    "zstd"
+    "zstd",
+    "cpp-httplib"
   ],
   "overrides": [
     {

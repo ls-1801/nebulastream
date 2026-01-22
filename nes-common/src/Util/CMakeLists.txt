@@ -16,6 +16,7 @@ add_source_files(nes-common
         Strings.cpp
         Files.cpp
         ThreadNaming.cpp
+        URLDownloader.cpp
         UUID.cpp
 )
 add_subdirectory(Logger)

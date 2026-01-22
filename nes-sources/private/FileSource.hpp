@@ -32,6 +32,7 @@ namespace NES
 {
 
 static constexpr std::string_view SYSTEST_FILE_PATH_PARAMETER = "file_path";
+static constexpr std::string_view SYSTEST_URL_PARAMETER = "url";
 
 class FileSource final : public Source
 {
@@ -71,8 +72,13 @@ struct ConfigParametersCSV
         std::nullopt,
         [](const std::unordered_map<std::string, std::string>& config) { return DescriptorConfig::tryGet(FILEPATH, config); }};
 
+    static inline const DescriptorConfig::ConfigParameter<std::string> URL{
+        std::string(SYSTEST_URL_PARAMETER),
+        std::nullopt,
+        [](const std::unordered_map<std::string, std::string>& config) { return DescriptorConfig::tryGet(URL, config); }};
+
     static inline std::unordered_map<std::string, DescriptorConfig::ConfigParameterContainer> parameterMap
-        = DescriptorConfig::createConfigParameterContainerMap(SourceDescriptor::parameterMap, FILEPATH);
+        = DescriptorConfig::createConfigParameterContainerMap(SourceDescriptor::parameterMap, FILEPATH, URL);
 };
 
 }
