@@ -2,7 +2,8 @@
     "name": "NebulaStream Development",
     // Image tag is the hash of dependencies. Update by running: ./docker/dependency/hash_dependencies.sh
     "image": "nebulastream/nes-development:25598dd77351a71a2c9c525f457bfd79a8ae9e5d63cbc878d02c73d19744c0af",
-    "containerUser": "root",
+    "remoteUser": "nes",
+    "updateRemoteUserUID": true,
     "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,consistency=cached",
     "customizations": {
@@ -33,10 +34,14 @@
         }
     },
     "mounts": [
-        "source=nebulastream-build-cache,target=/workspaces/${localWorkspaceFolderBasename}/build,type=volume"
+        "source=nebulastream-build-cache,target=/workspaces/${localWorkspaceFolderBasename}/build,type=volume",
+        "source=nebulastream-sccache,target=/home/nes/.cache/sccache,type=volume"
     ],
     "postCreateCommand": "echo 'Container ready. Run: cmake -B build -S . && cmake --build build' to build the project.",
     "remoteEnv": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "DEVCONTAINER": "true",
+        "NES_STDLIB": "libcxx",
+        "NES_SANITIZER": "none"
     }
 }
