@@ -23,14 +23,28 @@ jobs:
       # TODO #401 Investigate rootless docker containers
       options: --user root
       image: nebulastream/nes-ci:${{ inputs.dev_image_tag }}
+      env:
+        SCCACHE_DIR: ${{ github.workspace }}/.sccache
+        SCCACHE_BUCKET: ${{ secrets.VCPKG_BINARY_S3_BUCKET }}
+        SCCACHE_ENDPOINT: ${{ secrets.VCPKG_BINARY_S3_ENDPOINT }}
+        SCCACHE_REGION: auto
+        SCCACHE_S3_USE_SSL: true
+        SCCACHE_S3_KEY_PREFIX: sccache
+        AWS_ACCESS_KEY_ID: ${{ secrets.VCPKG_BINARY_S3_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.VCPKG_BINARY_S3_SECRET }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.head_sha }}
       - name: Configure CMake
         run: cmake -B build
+      - uses: ./.github/steps/start-sccache
+        name: Start sccache
       - name: Build to generate required code (e.g. grpc, ANTLR headers)
         run: cmake --build build
+      - uses: ./.github/steps/print-sccache-stats
+        name: Print sccache statistics
+        if: always()
       - name: Run clang-tidy
         id: run-clang-tidy
         # we explicitely set bash to have pipefail

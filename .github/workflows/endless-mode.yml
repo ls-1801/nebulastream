@@ -16,6 +16,14 @@ jobs:
     name: "${{matrix.arch}}-${{matrix.stdlib}}-${{matrix.build_type}}-${{ matrix.sanitizer }} Endless"
     timeout-minutes: 40
     runs-on: ${{ matrix.runner }}
+    env:
+      SCCACHE_BUCKET: ${{ secrets.VCPKG_BINARY_S3_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ secrets.VCPKG_BINARY_S3_ENDPOINT }}
+      SCCACHE_REGION: auto
+      SCCACHE_S3_USE_SSL: true
+      SCCACHE_S3_KEY_PREFIX: sccache
+      AWS_ACCESS_KEY_ID: ${{ secrets.VCPKG_BINARY_S3_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.VCPKG_BINARY_S3_SECRET }}
     strategy:
       fail-fast: false
       matrix:
@@ -41,7 +49,6 @@ jobs:
       - uses: ./.github/steps/prepare-github
         with:
           image_name: nebulastream/nes-development:${{ inputs.dev_image_tag }}-${{ matrix.stdlib }}-${{matrix.sanitizer}}
-          ccache_key: ${{ matrix.arch }}-${{ matrix.build_type }}-${{matrix.sanitizer}}-${{matrix.stdlib}}
       - uses: ./.github/steps/run-in-container
         with:
           image_name: nebulastream/nes-development:${{ inputs.dev_image_tag }}-${{ matrix.stdlib }}-${{matrix.sanitizer}}
@@ -53,7 +60,11 @@ jobs:
         with:
           image_name: nebulastream/nes-development:${{ inputs.dev_image_tag }}-${{ matrix.stdlib }}-${{matrix.sanitizer}}
           run: |
+            export SCCACHE_IDLE_TIMEOUT=0
+            sccache --start-server
             cmake --build build --target systest -j -- -k 0
+            echo "=== sccache Statistics ==="
+            sccache --show-stats || echo "sccache stats not available"
 
       - uses: ./.github/steps/run-in-container
         name: Run Endless Mode

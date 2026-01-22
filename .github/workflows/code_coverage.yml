@@ -26,6 +26,14 @@ jobs:
   build-code-coverage-pr-branch:
     timeout-minutes: 90
     runs-on: ${{ matrix.runner }}
+    env:
+      SCCACHE_BUCKET: ${{ secrets.VCPKG_BINARY_S3_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ secrets.VCPKG_BINARY_S3_ENDPOINT }}
+      SCCACHE_REGION: auto
+      SCCACHE_S3_USE_SSL: true
+      SCCACHE_S3_KEY_PREFIX: sccache
+      AWS_ACCESS_KEY_ID: ${{ secrets.VCPKG_BINARY_S3_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.VCPKG_BINARY_S3_SECRET }}
     strategy:
       fail-fast: false
       matrix:
@@ -41,15 +49,18 @@ jobs:
       - uses: ./.github/steps/prepare-github
         with:
           image_name: nebulastream/nes-ci:${{ inputs.dev_image_tag }}
-          ccache_key: coverage-${{ matrix.platform }}
       - uses: ./.github/steps/run-in-container
         name: Build coverage and export as lcov
         with:
           image_name: nebulastream/nes-ci:${{ inputs.dev_image_tag }}
           run: |
+            export SCCACHE_IDLE_TIMEOUT=0
+            sccache --start-server
             cmake -DCODE_COVERAGE=ON -B build
             cmake --build build -j -- -k 0
             cmake --build build --target ccov-all-export
+            echo "=== sccache Statistics ==="
+            sccache --show-stats || echo "sccache stats not available"
       - uses: codecov/codecov-action@v5
         with:
           slug: nebulastream/nebulastream
