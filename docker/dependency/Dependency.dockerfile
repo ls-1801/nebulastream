@@ -17,33 +17,87 @@ ADD https://github.com/nebulastream/clang-binaries/releases/download/vmlir-${LLV
 
 RUN zstd --decompress llvm.tar.zstd --stdout | tar -x
 
-FROM nebulastream/nes-development-base:${TAG}
+# syntax=docker/dockerfile:1
+FROM nebulastream/nes-development-base:${TAG} as dep-build
 ARG STDLIB=libcxx
+ARG ARCH
+ARG SANITIZER="none"
+
+# Install AWS CLI
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        URL="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"; \
+    else \
+        echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi && \
+    curl "$URL" -o "awscliv2.zip" && \
+    unzip -q awscliv2.zip && \
+    ./aws/install -i /usr/local/aws-cli -b /usr/local/bin && \
+    rm -rf awscliv2.zip aws
 
 COPY --from=llvm-download /clang /clang
 ENV CMAKE_PREFIX_PATH="/clang/:${CMAKE_PREFIX_PATH}"
 
 ADD vcpkg /vcpkg_input
-ARG SANITIZER="none"
-ARG ARCH
 ENV VCPKG_FORCE_SYSTEM_BINARIES=1
 
-RUN \
-    if [ "$STDLIB" = "libcxx" ]; then \
-      export VCPKG_STDLIB="libcxx"; \
-    else \
-      export VCPKG_STDLIB="local"; \
-    fi; \
-    cd /vcpkg_input \
-    && git clone https://github.com/microsoft/vcpkg.git vcpkg_repository \
-    && vcpkg_repository/bootstrap-vcpkg.sh --disableMetrics \
-    && vcpkg_repository/vcpkg install --overlay-triplets=custom-triplets --overlay-ports=vcpkg-registry/ports --triplet="${ARCH}-linux-${SANITIZER}-${VCPKG_STDLIB}" --host-triplet="${ARCH}-linux-none-${VCPKG_STDLIB}" \
-    && vcpkg_repository/vcpkg export --overlay-triplets=custom-triplets --overlay-ports=vcpkg-registry/ports --triplet="${ARCH}-linux-${SANITIZER}-${VCPKG_STDLIB}" --host-triplet="${ARCH}-linux-none-${VCPKG_STDLIB}" --raw --output-dir / --output vcpkg \
-    && rm -rf /vcpkg_input \
-    && chmod -R g=u,o=u /vcpkg
+# S3 binary cache configuration (passed as build args, secrets read at build time)
+ARG VCPKG_BINARY_S3_ENDPOINT=""
+ARG VCPKG_BINARY_S3_BUCKET=""
+ARG VCPKG_BINARY_S3_BUCKET_PATH=""
 
+RUN --mount=type=secret,id=VCPKG_BINARY_S3_KEY_ID \
+    --mount=type=secret,id=VCPKG_BINARY_S3_SECRET \
+    bash -c ' \
+    set -e; \
+    if [ -f /run/secrets/VCPKG_BINARY_S3_KEY_ID ] && [ -f /run/secrets/VCPKG_BINARY_S3_SECRET ] && [ -n "$VCPKG_BINARY_S3_BUCKET" ]; then \
+        export AWS_ACCESS_KEY_ID=$(cat /run/secrets/VCPKG_BINARY_S3_KEY_ID); \
+        export AWS_SECRET_ACCESS_KEY=$(cat /run/secrets/VCPKG_BINARY_S3_SECRET); \
+        export AWS_ENDPOINT_URL="$VCPKG_BINARY_S3_ENDPOINT"; \
+        export VCPKG_BINARY_SOURCES="clear;x-aws,s3://${VCPKG_BINARY_S3_BUCKET}/${VCPKG_BINARY_S3_BUCKET_PATH},readwrite"; \
+        echo "vcpkg binary caching enabled with S3 backend: s3://${VCPKG_BINARY_S3_BUCKET}/${VCPKG_BINARY_S3_BUCKET_PATH}"; \
+    else \
+        echo "No secrets found. Building without cloud cache..."; \
+        export VCPKG_BINARY_SOURCES="clear;default,readwrite"; \
+    fi; \
+    \
+    if [ "$STDLIB" = "libcxx" ]; then VCPKG_STDLIB="libcxx"; else VCPKG_STDLIB="local"; fi; \
+    \
+    cd /vcpkg_input; \
+    git clone https://github.com/microsoft/vcpkg.git vcpkg_repository; \
+    ./vcpkg_repository/bootstrap-vcpkg.sh --disableMetrics; \
+    \
+    ./vcpkg_repository/vcpkg install \
+        --overlay-triplets=custom-triplets \
+        --overlay-ports=vcpkg-registry/ports \
+        --triplet="${ARCH}-linux-${SANITIZER}-${VCPKG_STDLIB}" \
+        --host-triplet="${ARCH}-linux-none-${VCPKG_STDLIB}"'
+
+RUN bash -c ' \
+    set -e; \
+    if [ "$STDLIB" = "libcxx" ]; then VCPKG_STDLIB="libcxx"; else VCPKG_STDLIB="local"; fi; \
+    \
+    cd /vcpkg_input; \
+    ./vcpkg_repository/vcpkg export \
+        --overlay-triplets=custom-triplets \
+        --overlay-ports=vcpkg-registry/ports \
+        --triplet="${ARCH}-linux-${SANITIZER}-${VCPKG_STDLIB}" \
+        --raw --output-dir=/ --output=vcpkg; \
+    \
+    chmod -R g=u,o=u /vcpkg'
+
+FROM nebulastream/nes-development-base:${TAG}
+
+COPY --from=llvm-download /clang /clang
+COPY --from=dep-build /vcpkg /vcpkg
 # This hash is used to determine if a development/dependency image is compatible with the current checked out branch
+
+ENV CMAKE_PREFIX_PATH="/clang/:${CMAKE_PREFIX_PATH}"
+ARG STDLIB=libcxx
 ARG VCPKG_DEPENDENCY_HASH
+ARG SANITIZER="none"
 ENV VCPKG_DEPENDENCY_HASH=${VCPKG_DEPENDENCY_HASH}
 ENV VCPKG_STDLIB=${STDLIB}
 ENV VCPKG_SANITIZER=${SANITIZER}
