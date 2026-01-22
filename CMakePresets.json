@@ -1,0 +1,718 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "libcxx-none-debug",
+      "displayName": "libcxx / no sanitizer / Debug",
+      "binaryDir": "${sourceDir}/build-libcxx-none-debug",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "none" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "USE_SANITIZER": "none",
+        "NES_LOG_LEVEL": "DEBUG",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libcxx-none-release",
+      "displayName": "libcxx / no sanitizer / Release",
+      "binaryDir": "${sourceDir}/build-libcxx-none-release",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "none" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "USE_SANITIZER": "none",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libcxx-none-relwithdebinfo",
+      "displayName": "libcxx / no sanitizer / RelWithDebInfo",
+      "binaryDir": "${sourceDir}/build-libcxx-none-relwithdebinfo",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "none" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "USE_SANITIZER": "none",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libcxx-asan-debug",
+      "displayName": "libcxx / AddressSanitizer / Debug",
+      "binaryDir": "${sourceDir}/build-libcxx-asan-debug",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "address" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "USE_SANITIZER": "address",
+        "NES_LOG_LEVEL": "DEBUG",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libcxx-asan-release",
+      "displayName": "libcxx / AddressSanitizer / Release",
+      "binaryDir": "${sourceDir}/build-libcxx-asan-release",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "address" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "USE_SANITIZER": "address",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libcxx-asan-relwithdebinfo",
+      "displayName": "libcxx / AddressSanitizer / RelWithDebInfo",
+      "binaryDir": "${sourceDir}/build-libcxx-asan-relwithdebinfo",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "address" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "USE_SANITIZER": "address",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libcxx-tsan-debug",
+      "displayName": "libcxx / ThreadSanitizer / Debug",
+      "binaryDir": "${sourceDir}/build-libcxx-tsan-debug",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "thread" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "USE_SANITIZER": "thread",
+        "NES_LOG_LEVEL": "DEBUG",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libcxx-tsan-release",
+      "displayName": "libcxx / ThreadSanitizer / Release",
+      "binaryDir": "${sourceDir}/build-libcxx-tsan-release",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "thread" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "USE_SANITIZER": "thread",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libcxx-tsan-relwithdebinfo",
+      "displayName": "libcxx / ThreadSanitizer / RelWithDebInfo",
+      "binaryDir": "${sourceDir}/build-libcxx-tsan-relwithdebinfo",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "thread" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "USE_SANITIZER": "thread",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libcxx-ubsan-debug",
+      "displayName": "libcxx / UndefinedBehaviorSanitizer / Debug",
+      "binaryDir": "${sourceDir}/build-libcxx-ubsan-debug",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "undefined" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "USE_SANITIZER": "undefined",
+        "NES_LOG_LEVEL": "DEBUG",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libcxx-ubsan-release",
+      "displayName": "libcxx / UndefinedBehaviorSanitizer / Release",
+      "binaryDir": "${sourceDir}/build-libcxx-ubsan-release",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "undefined" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "USE_SANITIZER": "undefined",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libcxx-ubsan-relwithdebinfo",
+      "displayName": "libcxx / UndefinedBehaviorSanitizer / RelWithDebInfo",
+      "binaryDir": "${sourceDir}/build-libcxx-ubsan-relwithdebinfo",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "undefined" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "USE_SANITIZER": "undefined",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libstdcxx-none-debug",
+      "displayName": "libstdc++ / no sanitizer / Debug",
+      "binaryDir": "${sourceDir}/build-libstdcxx-none-debug",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libstdcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "none" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "USE_SANITIZER": "none",
+        "NES_LOG_LEVEL": "DEBUG",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libstdcxx-none-release",
+      "displayName": "libstdc++ / no sanitizer / Release",
+      "binaryDir": "${sourceDir}/build-libstdcxx-none-release",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libstdcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "none" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "USE_SANITIZER": "none",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libstdcxx-none-relwithdebinfo",
+      "displayName": "libstdc++ / no sanitizer / RelWithDebInfo",
+      "binaryDir": "${sourceDir}/build-libstdcxx-none-relwithdebinfo",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libstdcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "none" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "USE_SANITIZER": "none",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libstdcxx-asan-debug",
+      "displayName": "libstdc++ / AddressSanitizer / Debug",
+      "binaryDir": "${sourceDir}/build-libstdcxx-asan-debug",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libstdcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "address" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "USE_SANITIZER": "address",
+        "NES_LOG_LEVEL": "DEBUG",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libstdcxx-asan-release",
+      "displayName": "libstdc++ / AddressSanitizer / Release",
+      "binaryDir": "${sourceDir}/build-libstdcxx-asan-release",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libstdcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "address" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "USE_SANITIZER": "address",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libstdcxx-asan-relwithdebinfo",
+      "displayName": "libstdc++ / AddressSanitizer / RelWithDebInfo",
+      "binaryDir": "${sourceDir}/build-libstdcxx-asan-relwithdebinfo",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libstdcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "address" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "USE_SANITIZER": "address",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libstdcxx-tsan-debug",
+      "displayName": "libstdc++ / ThreadSanitizer / Debug",
+      "binaryDir": "${sourceDir}/build-libstdcxx-tsan-debug",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libstdcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "thread" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "USE_SANITIZER": "thread",
+        "NES_LOG_LEVEL": "DEBUG",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libstdcxx-tsan-release",
+      "displayName": "libstdc++ / ThreadSanitizer / Release",
+      "binaryDir": "${sourceDir}/build-libstdcxx-tsan-release",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libstdcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "thread" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "USE_SANITIZER": "thread",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libstdcxx-tsan-relwithdebinfo",
+      "displayName": "libstdc++ / ThreadSanitizer / RelWithDebInfo",
+      "binaryDir": "${sourceDir}/build-libstdcxx-tsan-relwithdebinfo",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libstdcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "thread" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "USE_SANITIZER": "thread",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libstdcxx-ubsan-debug",
+      "displayName": "libstdc++ / UndefinedBehaviorSanitizer / Debug",
+      "binaryDir": "${sourceDir}/build-libstdcxx-ubsan-debug",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libstdcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "undefined" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "USE_SANITIZER": "undefined",
+        "NES_LOG_LEVEL": "DEBUG",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libstdcxx-ubsan-release",
+      "displayName": "libstdc++ / UndefinedBehaviorSanitizer / Release",
+      "binaryDir": "${sourceDir}/build-libstdcxx-ubsan-release",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libstdcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "undefined" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "USE_SANITIZER": "undefined",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "libstdcxx-ubsan-relwithdebinfo",
+      "displayName": "libstdc++ / UndefinedBehaviorSanitizer / RelWithDebInfo",
+      "binaryDir": "${sourceDir}/build-libstdcxx-ubsan-relwithdebinfo",
+      "condition": {
+        "type": "allOf",
+        "conditions": [
+          { "type": "equals", "lhs": "$env{NES_STDLIB}", "rhs": "libstdcxx" },
+          { "type": "equals", "lhs": "$env{NES_SANITIZER}", "rhs": "undefined" }
+        ]
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "USE_SANITIZER": "undefined",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "libcxx-none-debug",
+      "configurePreset": "libcxx-none-debug",
+      "jobs": 0
+    },
+    {
+      "name": "libcxx-none-release",
+      "configurePreset": "libcxx-none-release",
+      "jobs": 0
+    },
+    {
+      "name": "libcxx-none-relwithdebinfo",
+      "configurePreset": "libcxx-none-relwithdebinfo",
+      "jobs": 0
+    },
+    {
+      "name": "libcxx-asan-debug",
+      "configurePreset": "libcxx-asan-debug",
+      "jobs": 0
+    },
+    {
+      "name": "libcxx-asan-release",
+      "configurePreset": "libcxx-asan-release",
+      "jobs": 0
+    },
+    {
+      "name": "libcxx-asan-relwithdebinfo",
+      "configurePreset": "libcxx-asan-relwithdebinfo",
+      "jobs": 0
+    },
+    {
+      "name": "libcxx-tsan-debug",
+      "configurePreset": "libcxx-tsan-debug",
+      "jobs": 0
+    },
+    {
+      "name": "libcxx-tsan-release",
+      "configurePreset": "libcxx-tsan-release",
+      "jobs": 0
+    },
+    {
+      "name": "libcxx-tsan-relwithdebinfo",
+      "configurePreset": "libcxx-tsan-relwithdebinfo",
+      "jobs": 0
+    },
+    {
+      "name": "libcxx-ubsan-debug",
+      "configurePreset": "libcxx-ubsan-debug",
+      "jobs": 0
+    },
+    {
+      "name": "libcxx-ubsan-release",
+      "configurePreset": "libcxx-ubsan-release",
+      "jobs": 0
+    },
+    {
+      "name": "libcxx-ubsan-relwithdebinfo",
+      "configurePreset": "libcxx-ubsan-relwithdebinfo",
+      "jobs": 0
+    },
+    {
+      "name": "libstdcxx-none-debug",
+      "configurePreset": "libstdcxx-none-debug",
+      "jobs": 0
+    },
+    {
+      "name": "libstdcxx-none-release",
+      "configurePreset": "libstdcxx-none-release",
+      "jobs": 0
+    },
+    {
+      "name": "libstdcxx-none-relwithdebinfo",
+      "configurePreset": "libstdcxx-none-relwithdebinfo",
+      "jobs": 0
+    },
+    {
+      "name": "libstdcxx-asan-debug",
+      "configurePreset": "libstdcxx-asan-debug",
+      "jobs": 0
+    },
+    {
+      "name": "libstdcxx-asan-release",
+      "configurePreset": "libstdcxx-asan-release",
+      "jobs": 0
+    },
+    {
+      "name": "libstdcxx-asan-relwithdebinfo",
+      "configurePreset": "libstdcxx-asan-relwithdebinfo",
+      "jobs": 0
+    },
+    {
+      "name": "libstdcxx-tsan-debug",
+      "configurePreset": "libstdcxx-tsan-debug",
+      "jobs": 0
+    },
+    {
+      "name": "libstdcxx-tsan-release",
+      "configurePreset": "libstdcxx-tsan-release",
+      "jobs": 0
+    },
+    {
+      "name": "libstdcxx-tsan-relwithdebinfo",
+      "configurePreset": "libstdcxx-tsan-relwithdebinfo",
+      "jobs": 0
+    },
+    {
+      "name": "libstdcxx-ubsan-debug",
+      "configurePreset": "libstdcxx-ubsan-debug",
+      "jobs": 0
+    },
+    {
+      "name": "libstdcxx-ubsan-release",
+      "configurePreset": "libstdcxx-ubsan-release",
+      "jobs": 0
+    },
+    {
+      "name": "libstdcxx-ubsan-relwithdebinfo",
+      "configurePreset": "libstdcxx-ubsan-relwithdebinfo",
+      "jobs": 0
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "libcxx-none-debug",
+      "configurePreset": "libcxx-none-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libcxx-none-release",
+      "configurePreset": "libcxx-none-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libcxx-none-relwithdebinfo",
+      "configurePreset": "libcxx-none-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libcxx-asan-debug",
+      "configurePreset": "libcxx-asan-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libcxx-asan-release",
+      "configurePreset": "libcxx-asan-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libcxx-asan-relwithdebinfo",
+      "configurePreset": "libcxx-asan-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libcxx-tsan-debug",
+      "configurePreset": "libcxx-tsan-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libcxx-tsan-release",
+      "configurePreset": "libcxx-tsan-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libcxx-tsan-relwithdebinfo",
+      "configurePreset": "libcxx-tsan-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libcxx-ubsan-debug",
+      "configurePreset": "libcxx-ubsan-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libcxx-ubsan-release",
+      "configurePreset": "libcxx-ubsan-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libcxx-ubsan-relwithdebinfo",
+      "configurePreset": "libcxx-ubsan-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libstdcxx-none-debug",
+      "configurePreset": "libstdcxx-none-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libstdcxx-none-release",
+      "configurePreset": "libstdcxx-none-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libstdcxx-none-relwithdebinfo",
+      "configurePreset": "libstdcxx-none-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libstdcxx-asan-debug",
+      "configurePreset": "libstdcxx-asan-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libstdcxx-asan-release",
+      "configurePreset": "libstdcxx-asan-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libstdcxx-asan-relwithdebinfo",
+      "configurePreset": "libstdcxx-asan-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libstdcxx-tsan-debug",
+      "configurePreset": "libstdcxx-tsan-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libstdcxx-tsan-release",
+      "configurePreset": "libstdcxx-tsan-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libstdcxx-tsan-relwithdebinfo",
+      "configurePreset": "libstdcxx-tsan-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libstdcxx-ubsan-debug",
+      "configurePreset": "libstdcxx-ubsan-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libstdcxx-ubsan-release",
+      "configurePreset": "libstdcxx-ubsan-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "libstdcxx-ubsan-relwithdebinfo",
+      "configurePreset": "libstdcxx-ubsan-relwithdebinfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
