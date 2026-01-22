@@ -33,7 +33,6 @@ jobs:
       - uses: ./.github/steps/prepare-github
         with:
           image_name: nebulastream/nes-ci:${{ inputs.dev_image_tag }}
-          ccache_key: format-check
       - uses: ./.github/steps/run-in-container
         name: Check Format
         with:

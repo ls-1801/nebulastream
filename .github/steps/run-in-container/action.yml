@@ -1,7 +1,7 @@
 name: Run Command in Container
 description: |
   Runs script or command directly in a development container. The container is mounted in the current working directory
-  and uses the current user.
+  and uses the current user. Passes sccache S3 environment variables for distributed caching.
 
 inputs:
   image_name:
@@ -18,6 +18,15 @@ runs:
       shell: bash
       run: |
         docker run \
-             -v $(pwd):$(pwd) -e CCACHE_DIR=$(pwd)/.ccache --workdir $(pwd) -u $(id -u):$(id -g) \
+             -v $(pwd):$(pwd) \
+             -e SCCACHE_DIR=$(pwd)/.sccache \
+             -e SCCACHE_BUCKET \
+             -e SCCACHE_ENDPOINT \
+             -e SCCACHE_REGION \
+             -e SCCACHE_S3_USE_SSL \
+             -e SCCACHE_S3_KEY_PREFIX \
+             -e AWS_ACCESS_KEY_ID \
+             -e AWS_SECRET_ACCESS_KEY \
+             --workdir $(pwd) -u $(id -u):$(id -g) \
              ${{inputs.image_name}} \
               /usr/bin/bash -c '${{inputs.run}}'
