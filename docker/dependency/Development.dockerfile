@@ -36,3 +36,14 @@ RUN wget -P /usr/share/libcxx/  https://raw.githubusercontent.com/llvm/llvm-proj
     printers.register_libcxx_printer_loader()
     end
 EOF
+
+# Create non-root user for development
+ARG UID=1000
+ARG GID=1000
+ARG USERNAME=nebulastream
+RUN groupadd --gid ${GID} ${USERNAME} \
+    && useradd --uid ${UID} --gid ${GID} --create-home ${USERNAME} \
+    && chown -R ${UID}:${GID} ${NES_PREBUILT_VCPKG_ROOT}
+
+USER ${USERNAME}
+WORKDIR /home/${USERNAME}
