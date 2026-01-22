@@ -78,7 +78,6 @@ jobs:
       arch: ${{ matrix.arch }}
 
   clang-tidy-diff:
-    if: github.event.pull_request.head.repo.fork == false
     needs: [ get-dev-images, smoke-tests ]
     uses: ./.github/workflows/clang_tidy_diff.yml
     with:
