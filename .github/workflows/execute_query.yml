@@ -41,33 +41,30 @@ on:
             SELECT * FROM ENDLESS INTO SOMESINK2;
             SELECT val_1 + UINT32(1) AS val_plus_1 FROM ENDLESS INTO SOMESINK3;
             SELECT AVG(val_1) AS agg_val_1 FROM ENDLESS WINDOW TUMBLING(ts, SIZE 1 SEC) INTO SOMESINK4;
-            
+
 
 jobs:
   execute-query:
     name: "E2E Test"
-    timeout-minutes: 1440 # 24 hours
-    container:
-      image: nebulastream/nes-development:${{ inputs.dev_image_tag }}-${{ matrix.stdlib }}-${{ matrix.sanitizer }}
-      volumes:
-        - ccache:/ccache
-        - test-file-cache:/test-file-cache
-      env:
-        CCACHE_DIR: /ccache
-        MOLD_JOBS: 1
-      # TODO #401 Investigate rootless docker containers
-      options: --user root
-    runs-on: [ self-hosted, linux, Build, "${{inputs.arch}}" ]
+    timeout-minutes: 60
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         stdlib: [ 'libcxx' ]
         build_type: [ 'Debug' ]
         sanitizer: [ 'none' ]
+        include:
+          - runner: [ "ubuntu-24.04" ]
     steps:
       - name: checkout code
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.head_sha }}
+      - uses: ./.github/steps/prepare-github
+        name: Preparing Github Runners
+        with:
+          image_name: nebulastream/nes-development:${{ inputs.dev_image_tag }}-${{ matrix.stdlib }}-${{ matrix.sanitizer }}
+          ccache_key: ${{ inputs.arch }}-${{ matrix.build_type }}-${{matrix.sanitizer}}-${{matrix.stdlib}}-e2e
 
       - name: Write Query to File
         run: |
@@ -75,19 +72,23 @@ jobs:
           cat << 'EOF' > query.sql
           ${{ inputs.query_config }}
           EOF
-        
+
           cat query.sql
-      - name: Build and Test
-        run: |
-            cmake -GNinja -B build -DExternalData_OBJECT_STORES=/test-file-cache -DNES_LOG_LEVEL=DEBUG
+
+      - uses: ./.github/steps/run-in-container
+        name: Build and Test
+        with:
+          image_name: nebulastream/nes-development:${{ inputs.dev_image_tag }}-${{ matrix.stdlib }}-${{ matrix.sanitizer }}
+          run: |
+            cmake -GNinja -B build -DNES_LOG_LEVEL=DEBUG
             cmake --build build -j -- -k 0
-            
+
             build/nes-single-node-worker/nes-single-node-worker > worker.log 2>&1 &
             WORKER_PID=$!
-            
+
             sleep 5
             build/nes-nebuli/nes-nebuli -d -s localhost:8080 < query.sql
-            
+
             # wait and monitor
             echo "Waiting and monitoring worker..."
             ELAPSED_SECONDS=0
@@ -102,14 +103,14 @@ jobs:
               sleep 60
               ELAPSED_SECONDS=$((ELAPSED_SECONDS + 60))
             done
-            
+
             # stopping all queries
             build/nes-nebuli/nes-nebuli -d -s localhost:8080 stop 1
             build/nes-nebuli/nes-nebuli -d -s localhost:8080 stop 2
             build/nes-nebuli/nes-nebuli -d -s localhost:8080 stop 3
             build/nes-nebuli/nes-nebuli -d -s localhost:8080 stop 4
             echo "Worker stayed alive!"
-            
+
             # stop worker
             kill $WORKER_PID
             wait $WORKER_PID || true
@@ -118,19 +119,19 @@ jobs:
       - name: Output Logs on failure
         if: failure()
         run: |
-          cat nebuli.log
-          cat worker.log
+          cat nebuli.log || true
+          cat worker.log || true
 
       - name: Upload nebuli.log on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: nebuli-log-${{ matrix.arch }}
+          name: nebuli-log-${{ inputs.arch }}
           path: nebuli.log
 
       - name: Upload worker.log on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: worker-log-${{ matrix.arch }}
+          name: worker-log-${{ inputs.arch }}
           path: worker.log
