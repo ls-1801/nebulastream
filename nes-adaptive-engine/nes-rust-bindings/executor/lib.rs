@@ -18,6 +18,7 @@
 //! adaptive-engine executor with NebulaStream's pipeline execution model.
 
 use adaptive_engine::ffi::buffer::BufferHandleOpaque;
+use adaptive_engine::ffi::execution_context::ExecutionContextOpaque;
 use adaptive_engine::ffi::handles::{
     BufferVecHandle, ExecutorHandleOpaque, ExecutorOpaqueHandle, GraphBuilderOpaque,
 };
@@ -225,6 +226,44 @@ pub mod ffi {
 
         /// Free the graph builder
         fn adaptive_graph_builder_free(builder: Box<AdaptiveGraphBuilder>);
+
+        // ============================================================
+        // Execution context callback functions (for C++ to call Rust)
+        // ============================================================
+
+        /// Emit a buffer to successor pipelines via Rust execution context.
+        ///
+        /// # Arguments
+        ///
+        /// * `context_handle` - Raw pointer to ExecutionContextOpaque (as uintptr_t)
+        /// * `data_ptr` - Pointer to buffer data
+        /// * `size` - Size of buffer data
+        /// * `sequence_number` - Buffer sequence number
+        /// * `origin_id` - Buffer origin ID
+        /// * `watermark` - Buffer watermark
+        /// * `number_of_tuples` - Number of tuples in buffer
+        /// * `chunk_number` - Chunk number (-1 if not chunked)
+        /// * `last_chunk` - Whether this is the last chunk
+        ///
+        /// # Returns
+        ///
+        /// 1 if successful, 0 on failure
+        ///
+        /// # Safety
+        ///
+        /// The context_handle must be a valid ExecutionContextOpaque pointer.
+        /// The data_ptr must point to valid memory of at least `size` bytes.
+        unsafe fn rust_exec_context_emit_buffer(
+            context_handle: usize,
+            data_ptr: *const u8,
+            size: usize,
+            sequence_number: u64,
+            origin_id: u64,
+            watermark: u64,
+            number_of_tuples: u64,
+            chunk_number: i64,
+            last_chunk: bool,
+        ) -> i32;
     }
 }
 
@@ -491,4 +530,51 @@ fn error_code_to_result(code: i32) -> ffi::ExecutorResult {
         5 => ffi::ExecutorResult::GraphError,
         _ => ffi::ExecutorResult::Unknown,
     }
+}
+
+// ============================================================
+// Execution context callback implementation
+// ============================================================
+
+/// Emit a buffer to successor pipelines via Rust execution context.
+///
+/// This function is called from C++ RustBridgeExecutionContext::emitBuffer
+/// to route buffer emissions back through the Rust adaptive engine.
+///
+/// # Safety
+///
+/// - `context_handle` must be a valid pointer to an ExecutionContextOpaque
+/// - `data_ptr` must point to valid memory of at least `size` bytes
+unsafe fn rust_exec_context_emit_buffer(
+    context_handle: usize,
+    data_ptr: *const u8,
+    size: usize,
+    sequence_number: u64,
+    origin_id: u64,
+    watermark: u64,
+    number_of_tuples: u64,
+    chunk_number: i64,
+    last_chunk: bool,
+) -> i32 {
+    // Convert the context handle back to an ExecutionContextOpaque reference
+    let context_ptr = context_handle as *const ExecutionContextOpaque;
+    if context_ptr.is_null() {
+        return 0; // Failure - null context
+    }
+    let context = &*context_ptr;
+
+    // Create a BufferHandleOpaque from the raw data
+    let buffer_handle = adaptive_engine::ffi::buffer::buffer_create_from_tuple_buffer(
+        data_ptr,
+        size,
+        sequence_number,
+        origin_id,
+        watermark,
+        number_of_tuples,
+        chunk_number,
+        last_chunk,
+    );
+
+    // Call the Rust exec_context_emit_buffer function
+    adaptive_engine::ffi::execution_context::exec_context_emit_buffer(context, buffer_handle)
 }

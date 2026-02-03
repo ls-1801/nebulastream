@@ -59,6 +59,17 @@ corrosion_import_crate(
         FLAGS ${ADDITIONAL_CARGOFLAGS}
 )
 
+# Import adaptive-engine bindings if the directory exists
+if(EXISTS "${CMAKE_SOURCE_DIR}/nes-adaptive-engine/Cargo.toml")
+    corrosion_import_crate(
+            MANIFEST_PATH nes-adaptive-engine/Cargo.toml
+            CRATES nes_adaptive_engine_bindings
+            IMPORTED_CRATES ADAPTIVE_CRATES
+            CRATE_TYPES staticlib
+            FLAGS ${ADDITIONAL_CARGOFLAGS}
+    )
+endif()
+
 # Arguments are passed to cargo via an environment which we attach to the  nes_rust_bindings target and is loaded by corrosion
 list(JOIN CXXFLAGS_LIST " " ADDITIONAL_CXXFLAGS)
 list(JOIN RUSTFLAGS_LIST " " ADDITIONAL_RUSTFLAGS)
@@ -79,4 +90,10 @@ if (NOT "${ENV_VARS_LIST}" STREQUAL "")
     set_property(
             TARGET nes_rust_bindings
             PROPERTY CORROSION_ENVIRONMENT_VARIABLES ${ENV_VARS_LIST})
+    # Also set for adaptive-engine bindings if they exist
+    if(TARGET nes_adaptive_engine_bindings)
+        set_property(
+                TARGET nes_adaptive_engine_bindings
+                PROPERTY CORROSION_ENVIRONMENT_VARIABLES ${ENV_VARS_LIST})
+    endif()
 endif ()

@@ -103,3 +103,96 @@ uint64_t NESExecutionContext::getWorkerCount() const
 {
     return ctx.getNumberOfWorkerThreads();
 }
+
+// ============================================================
+// RustBridgeExecutionContext implementation
+// ============================================================
+
+RustBridgeExecutionContext::RustBridgeExecutionContext(
+    uintptr_t rustContextHandle,
+    std::shared_ptr<NES::AbstractBufferProvider> bufferManager,
+    NES::WorkerThreadId workerId,
+    NES::PipelineId pipelineId)
+    : rustContextHandle_(rustContextHandle)
+    , bufferManager_(std::move(bufferManager))
+    , workerId_(workerId)
+    , pipelineId_(pipelineId)
+{
+}
+
+bool RustBridgeExecutionContext::emitBuffer(const NES::TupleBuffer& buffer, ContinuationPolicy /*policy*/)
+{
+    // Get buffer data and metadata
+    const auto* dataPtr = buffer.getAvailableMemoryArea<uint8_t>().data();
+    const auto size = buffer.getBufferSize();
+    const auto sequenceNumber = buffer.getSequenceNumber().getRawValue();
+    const auto originId = buffer.getOriginId().getRawValue();
+    const auto watermark = buffer.getWatermark().getRawValue();
+    const auto numberOfTuples = buffer.getNumberOfTuples();
+    const auto chunkNumber = static_cast<int64_t>(buffer.getChunkNumber().getRawValue());
+    const auto lastChunk = buffer.isLastChunk();
+
+    // Call Rust FFI function to emit the buffer
+    // SAFETY: rustContextHandle_ is a valid ExecutionContextOpaque pointer passed from Rust
+    const auto result = rust_exec_context_emit_buffer(
+        rustContextHandle_,
+        dataPtr,
+        size,
+        sequenceNumber,
+        originId,
+        watermark,
+        numberOfTuples,
+        chunkNumber,
+        lastChunk);
+
+    return result != 0;
+}
+
+void RustBridgeExecutionContext::repeatTask(const NES::TupleBuffer& /*buffer*/, std::chrono::milliseconds /*delay*/)
+{
+    // TODO(US-015): Implement repeatTask routing to Rust
+}
+
+NES::TupleBuffer RustBridgeExecutionContext::allocateTupleBuffer()
+{
+    // TODO(US-014): Implement buffer allocation via BufferManager
+    return bufferManager_->getBufferBlocking();
+}
+
+NES::WorkerThreadId RustBridgeExecutionContext::getId() const
+{
+    // TODO(US-013): Return the stored worker ID
+    return workerId_;
+}
+
+uint64_t RustBridgeExecutionContext::getNumberOfWorkerThreads() const
+{
+    // TODO(US-013): Implement via Rust FFI call
+    return 1;
+}
+
+std::shared_ptr<NES::AbstractBufferProvider> RustBridgeExecutionContext::getBufferManager() const
+{
+    // TODO(US-013): Return stored buffer manager
+    return bufferManager_;
+}
+
+NES::PipelineId RustBridgeExecutionContext::getPipelineId() const
+{
+    // TODO(US-013): Return stored pipeline ID
+    return pipelineId_;
+}
+
+std::unordered_map<NES::OperatorHandlerId, std::shared_ptr<NES::OperatorHandler>>&
+RustBridgeExecutionContext::getOperatorHandlers()
+{
+    // TODO(US-013): Return stored operator handlers
+    return operatorHandlers_;
+}
+
+void RustBridgeExecutionContext::setOperatorHandlers(
+    std::unordered_map<NES::OperatorHandlerId, std::shared_ptr<NES::OperatorHandler>>& handlers)
+{
+    // TODO(US-013): Set operator handlers
+    operatorHandlers_ = handlers;
+}
