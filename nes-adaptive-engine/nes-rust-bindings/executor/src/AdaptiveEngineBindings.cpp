@@ -148,9 +148,32 @@ bool RustBridgeExecutionContext::emitBuffer(const NES::TupleBuffer& buffer, Cont
     return result != 0;
 }
 
-void RustBridgeExecutionContext::repeatTask(const NES::TupleBuffer& /*buffer*/, std::chrono::milliseconds /*delay*/)
+void RustBridgeExecutionContext::repeatTask(const NES::TupleBuffer& buffer, std::chrono::milliseconds delay)
 {
-    // TODO(US-015): Implement repeatTask routing to Rust
+    // Get buffer data and metadata
+    const auto* dataPtr = buffer.getAvailableMemoryArea<uint8_t>().data();
+    const auto size = buffer.getBufferSize();
+    const auto sequenceNumber = buffer.getSequenceNumber().getRawValue();
+    const auto originId = buffer.getOriginId().getRawValue();
+    const auto watermark = buffer.getWatermark().getRawValue();
+    const auto numberOfTuples = buffer.getNumberOfTuples();
+    const auto chunkNumber = static_cast<int64_t>(buffer.getChunkNumber().getRawValue());
+    const auto lastChunk = buffer.isLastChunk();
+    const auto delayMs = static_cast<uint64_t>(delay.count());
+
+    // Call Rust FFI function to schedule re-execution
+    // SAFETY: rustContextHandle_ is a valid ExecutionContextOpaque pointer passed from Rust
+    rust_exec_context_repeat_task(
+        rustContextHandle_,
+        dataPtr,
+        size,
+        sequenceNumber,
+        originId,
+        watermark,
+        numberOfTuples,
+        chunkNumber,
+        lastChunk,
+        delayMs);
 }
 
 NES::TupleBuffer RustBridgeExecutionContext::allocateTupleBuffer()

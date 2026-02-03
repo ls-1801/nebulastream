@@ -279,6 +279,42 @@ pub mod ffi {
         ///
         /// The context_handle must be a valid ExecutionContextOpaque pointer.
         unsafe fn rust_exec_context_get_worker_count(context_handle: usize) -> u64;
+
+        /// Schedule re-execution of a buffer after a delay via Rust execution context.
+        ///
+        /// # Arguments
+        ///
+        /// * `context_handle` - Raw pointer to ExecutionContextOpaque (as uintptr_t)
+        /// * `data_ptr` - Pointer to buffer data
+        /// * `size` - Size of buffer data
+        /// * `sequence_number` - Buffer sequence number
+        /// * `origin_id` - Buffer origin ID
+        /// * `watermark` - Buffer watermark
+        /// * `number_of_tuples` - Number of tuples in buffer
+        /// * `chunk_number` - Chunk number (-1 if not chunked)
+        /// * `last_chunk` - Whether this is the last chunk
+        /// * `delay_ms` - Delay in milliseconds before re-execution
+        ///
+        /// # Returns
+        ///
+        /// 1 if successful, 0 on failure
+        ///
+        /// # Safety
+        ///
+        /// The context_handle must be a valid ExecutionContextOpaque pointer.
+        /// The data_ptr must point to valid memory of at least `size` bytes.
+        unsafe fn rust_exec_context_repeat_task(
+            context_handle: usize,
+            data_ptr: *const u8,
+            size: usize,
+            sequence_number: u64,
+            origin_id: u64,
+            watermark: u64,
+            number_of_tuples: u64,
+            chunk_number: i64,
+            last_chunk: bool,
+            delay_ms: u64,
+        ) -> i32;
     }
 }
 
@@ -612,4 +648,49 @@ unsafe fn rust_exec_context_get_worker_count(context_handle: usize) -> u64 {
 
     // Call the Rust exec_context_get_worker_count function
     adaptive_engine::ffi::execution_context::exec_context_get_worker_count(context) as u64
+}
+
+/// Schedule re-execution of a buffer after a delay via Rust execution context.
+///
+/// This function is called from C++ RustBridgeExecutionContext::repeatTask
+/// to schedule re-execution of the current pipeline with a buffer after a delay.
+///
+/// # Safety
+///
+/// - `context_handle` must be a valid pointer to an ExecutionContextOpaque
+/// - `data_ptr` must point to valid memory of at least `size` bytes
+#[allow(clippy::too_many_arguments)]
+unsafe fn rust_exec_context_repeat_task(
+    context_handle: usize,
+    data_ptr: *const u8,
+    size: usize,
+    sequence_number: u64,
+    origin_id: u64,
+    watermark: u64,
+    number_of_tuples: u64,
+    chunk_number: i64,
+    last_chunk: bool,
+    delay_ms: u64,
+) -> i32 {
+    // Convert the context handle back to an ExecutionContextOpaque reference
+    let context_ptr = context_handle as *const ExecutionContextOpaque;
+    if context_ptr.is_null() {
+        return 0; // Failure - null context
+    }
+    let context = &*context_ptr;
+
+    // Create a BufferHandleOpaque from the raw data
+    let buffer_handle = adaptive_engine::ffi::buffer::buffer_create_from_tuple_buffer(
+        data_ptr,
+        size,
+        sequence_number,
+        origin_id,
+        watermark,
+        number_of_tuples,
+        chunk_number,
+        last_chunk,
+    );
+
+    // Call the Rust exec_context_repeat_task function
+    adaptive_engine::ffi::execution_context::exec_context_repeat_task(context, buffer_handle, delay_ms)
 }
