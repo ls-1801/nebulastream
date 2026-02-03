@@ -25,8 +25,21 @@
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <ExecutablePipelineStage.hpp>
 
 struct TupleBufferMetadata;
+
+/// Opaque handle wrapping a NES TupleBuffer for FFI boundary.
+///
+/// This struct provides a stable pointer interface for passing TupleBuffers
+/// across the Rust FFI boundary. It holds a copy of the TupleBuffer which
+/// maintains proper reference counting.
+struct NESTupleBufferHandle
+{
+    NES::TupleBuffer buffer;
+
+    explicit NESTupleBufferHandle(NES::TupleBuffer buf) : buffer(std::move(buf)) {}
+};
 
 /// The NESTupleBufferBuilder is a wrapper around a NES TupleBuffer with methods exposed to Rust.
 /// This allows Rust code to read/write data and metadata from/to a TupleBuffer without
@@ -188,3 +201,45 @@ private:
     /// Pipeline ID
     NES::PipelineId pipelineId_;
 };
+
+// ============================================================================
+// C FFI Functions for Stage Lifecycle
+// ============================================================================
+// These functions are called from Rust NesPipelineWrapper to invoke C++
+// ExecutablePipelineStage methods. They create a RustBridgeExecutionContext
+// that routes calls back to the Rust execution context.
+
+extern "C"
+{
+    /// Call stage->start(ctx) on a C++ ExecutablePipelineStage.
+    ///
+    /// Creates a RustBridgeExecutionContext that routes calls back to Rust,
+    /// then invokes the stage's start() method.
+    ///
+    /// @param stage_ptr Pointer to ExecutablePipelineStage (as uintptr_t)
+    /// @param ctx_ptr Pointer to Rust ExecutionContextOpaque (as uintptr_t)
+    /// @return 0 on success, non-zero on failure
+    int32_t nes_stage_start(uintptr_t stage_ptr, uintptr_t ctx_ptr);
+
+    /// Call stage->execute(buffer, ctx) on a C++ ExecutablePipelineStage.
+    ///
+    /// Creates a RustBridgeExecutionContext that routes calls back to Rust,
+    /// extracts the TupleBuffer from the handle, then invokes the stage's
+    /// execute() method.
+    ///
+    /// @param stage_ptr Pointer to ExecutablePipelineStage (as uintptr_t)
+    /// @param buffer_ptr Pointer to NESTupleBufferHandle containing the input buffer
+    /// @param ctx_ptr Pointer to Rust ExecutionContextOpaque (as uintptr_t)
+    /// @return 0 on success, non-zero on failure
+    int32_t nes_stage_execute(uintptr_t stage_ptr, const NESTupleBufferHandle* buffer_ptr, uintptr_t ctx_ptr);
+
+    /// Call stage->stop(ctx) on a C++ ExecutablePipelineStage.
+    ///
+    /// Creates a RustBridgeExecutionContext that routes calls back to Rust,
+    /// then invokes the stage's stop() method.
+    ///
+    /// @param stage_ptr Pointer to ExecutablePipelineStage (as uintptr_t)
+    /// @param ctx_ptr Pointer to Rust ExecutionContextOpaque (as uintptr_t)
+    /// @return 0 on success, non-zero on failure
+    int32_t nes_stage_stop(uintptr_t stage_ptr, uintptr_t ctx_ptr);
+}

@@ -213,3 +213,128 @@ void RustBridgeExecutionContext::setOperatorHandlers(
 {
     operatorHandlers_ = handlers;
 }
+
+// ============================================================================
+// C FFI Functions for Stage Lifecycle
+// ============================================================================
+
+/// Helper function to create a RustBridgeExecutionContext for FFI calls.
+///
+/// Note: Currently creates context with no buffer manager. Buffer allocation
+/// will fail if the stage tries to allocate buffers. This is acceptable for
+/// the MVP since most stages only emit pre-allocated buffers.
+static RustBridgeExecutionContext createRustBridgeContext(uintptr_t ctx_ptr)
+{
+    return RustBridgeExecutionContext(
+        ctx_ptr,
+        nullptr, // No buffer manager - allocateTupleBuffer will return invalid buffer
+        NES::WorkerThreadId(0),
+        NES::PipelineId(0));
+}
+
+extern "C"
+{
+
+int32_t nes_stage_start(uintptr_t stage_ptr, uintptr_t ctx_ptr)
+{
+    // Validate pointers
+    if (stage_ptr == 0 || ctx_ptr == 0)
+    {
+        return -1; // Invalid pointer error
+    }
+
+    try
+    {
+        // Cast stage pointer to ExecutablePipelineStage
+        auto* stage = reinterpret_cast<NES::ExecutablePipelineStage*>(stage_ptr);
+
+        // Create a RustBridgeExecutionContext that routes calls back to Rust
+        auto context = createRustBridgeContext(ctx_ptr);
+
+        // Call stage->start()
+        stage->start(context);
+
+        return 0; // Success
+    }
+    catch (const std::exception& e)
+    {
+        // Log error in production, for now just return error code
+        // NES_ERROR("nes_stage_start failed: {}", e.what());
+        return -2; // Exception error
+    }
+    catch (...)
+    {
+        return -3; // Unknown error
+    }
+}
+
+int32_t nes_stage_execute(uintptr_t stage_ptr, const NESTupleBufferHandle* buffer_ptr, uintptr_t ctx_ptr)
+{
+    // Validate pointers
+    if (stage_ptr == 0 || buffer_ptr == nullptr || ctx_ptr == 0)
+    {
+        return -1; // Invalid pointer error
+    }
+
+    try
+    {
+        // Cast stage pointer to ExecutablePipelineStage
+        auto* stage = reinterpret_cast<NES::ExecutablePipelineStage*>(stage_ptr);
+
+        // Create a RustBridgeExecutionContext that routes calls back to Rust
+        auto context = createRustBridgeContext(ctx_ptr);
+
+        // Get the TupleBuffer from the handle
+        const NES::TupleBuffer& buffer = buffer_ptr->buffer;
+
+        // Call stage->execute()
+        stage->execute(buffer, context);
+
+        return 0; // Success
+    }
+    catch (const std::exception& e)
+    {
+        // Log error in production, for now just return error code
+        // NES_ERROR("nes_stage_execute failed: {}", e.what());
+        return -2; // Exception error
+    }
+    catch (...)
+    {
+        return -3; // Unknown error
+    }
+}
+
+int32_t nes_stage_stop(uintptr_t stage_ptr, uintptr_t ctx_ptr)
+{
+    // Validate pointers
+    if (stage_ptr == 0 || ctx_ptr == 0)
+    {
+        return -1; // Invalid pointer error
+    }
+
+    try
+    {
+        // Cast stage pointer to ExecutablePipelineStage
+        auto* stage = reinterpret_cast<NES::ExecutablePipelineStage*>(stage_ptr);
+
+        // Create a RustBridgeExecutionContext that routes calls back to Rust
+        auto context = createRustBridgeContext(ctx_ptr);
+
+        // Call stage->stop()
+        stage->stop(context);
+
+        return 0; // Success
+    }
+    catch (const std::exception& e)
+    {
+        // Log error in production, for now just return error code
+        // NES_ERROR("nes_stage_stop failed: {}", e.what());
+        return -2; // Exception error
+    }
+    catch (...)
+    {
+        return -3; // Unknown error
+    }
+}
+
+} // extern "C"
