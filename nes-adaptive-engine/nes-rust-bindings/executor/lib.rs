@@ -264,6 +264,21 @@ pub mod ffi {
             chunk_number: i64,
             last_chunk: bool,
         ) -> i32;
+
+        /// Get the number of worker threads from the Rust execution context.
+        ///
+        /// # Arguments
+        ///
+        /// * `context_handle` - Raw pointer to ExecutionContextOpaque (as uintptr_t)
+        ///
+        /// # Returns
+        ///
+        /// The number of worker threads
+        ///
+        /// # Safety
+        ///
+        /// The context_handle must be a valid ExecutionContextOpaque pointer.
+        unsafe fn rust_exec_context_get_worker_count(context_handle: usize) -> u64;
     }
 }
 
@@ -577,4 +592,24 @@ unsafe fn rust_exec_context_emit_buffer(
 
     // Call the Rust exec_context_emit_buffer function
     adaptive_engine::ffi::execution_context::exec_context_emit_buffer(context, buffer_handle)
+}
+
+/// Get the number of worker threads from the Rust execution context.
+///
+/// This function is called from C++ RustBridgeExecutionContext::getNumberOfWorkerThreads
+/// to retrieve the worker count from the Rust adaptive engine.
+///
+/// # Safety
+///
+/// - `context_handle` must be a valid pointer to an ExecutionContextOpaque
+unsafe fn rust_exec_context_get_worker_count(context_handle: usize) -> u64 {
+    // Convert the context handle back to an ExecutionContextOpaque reference
+    let context_ptr = context_handle as *const ExecutionContextOpaque;
+    if context_ptr.is_null() {
+        return 1; // Default to 1 worker on null context
+    }
+    let context = &*context_ptr;
+
+    // Call the Rust exec_context_get_worker_count function
+    adaptive_engine::ffi::execution_context::exec_context_get_worker_count(context) as u64
 }

@@ -161,38 +161,33 @@ NES::TupleBuffer RustBridgeExecutionContext::allocateTupleBuffer()
 
 NES::WorkerThreadId RustBridgeExecutionContext::getId() const
 {
-    // TODO(US-013): Return the stored worker ID
     return workerId_;
 }
 
 uint64_t RustBridgeExecutionContext::getNumberOfWorkerThreads() const
 {
-    // TODO(US-013): Implement via Rust FFI call
-    return 1;
+    // Route to Rust execution context to get the actual worker count
+    return rust_exec_context_get_worker_count(rustContextHandle_);
 }
 
 std::shared_ptr<NES::AbstractBufferProvider> RustBridgeExecutionContext::getBufferManager() const
 {
-    // TODO(US-013): Return stored buffer manager
     return bufferManager_;
 }
 
 NES::PipelineId RustBridgeExecutionContext::getPipelineId() const
 {
-    // TODO(US-013): Return stored pipeline ID
     return pipelineId_;
 }
 
 std::unordered_map<NES::OperatorHandlerId, std::shared_ptr<NES::OperatorHandler>>&
 RustBridgeExecutionContext::getOperatorHandlers()
 {
-    // TODO(US-013): Return stored operator handlers
     return operatorHandlers_;
 }
 
 void RustBridgeExecutionContext::setOperatorHandlers(
     std::unordered_map<NES::OperatorHandlerId, std::shared_ptr<NES::OperatorHandler>>& handlers)
 {
-    // TODO(US-013): Set operator handlers
     operatorHandlers_ = handlers;
 }
