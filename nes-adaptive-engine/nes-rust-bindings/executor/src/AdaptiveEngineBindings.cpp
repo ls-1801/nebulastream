@@ -155,7 +155,6 @@ void RustBridgeExecutionContext::repeatTask(const NES::TupleBuffer& /*buffer*/, 
 
 NES::TupleBuffer RustBridgeExecutionContext::allocateTupleBuffer()
 {
-    // TODO(US-014): Implement buffer allocation via BufferManager
     return bufferManager_->getBufferBlocking();
 }
 
