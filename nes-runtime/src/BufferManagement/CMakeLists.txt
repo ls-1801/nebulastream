@@ -10,12 +10,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(BufferManagement)
-add_subdirectory(Runtime)
-add_subdirectory(Pipelines)
-add_subdirectory(Listeners)
-
 add_source_files(nes-runtime
-        ExecutionContext.cpp
-        ExecutableQueryPlan.cpp
+        NesBufferProvider.cpp
 )
