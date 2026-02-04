@@ -34,6 +34,7 @@ using InlineSinkId = NESStrongType<uint64_t, struct InlineSinkId_, 0, 1>;
 
 /// Local Identifiers: These Identifiers are unique in a local scope. E.g. the PipelineId is unique in regard to a single query plan.
 using PipelineId = NESStrongType<uint64_t, struct PipelineId_, 0, 1>;
+using TaskId = NESStrongType<uint64_t, struct TaskId_, 0, 1>;
 using SequenceNumber = NESStrongType<uint64_t, struct SequenceNumber_, 0, 1>;
 using ChunkNumber = NESStrongType<uint64_t, struct ChunkNumber_, SequenceNumber::INVALID, SequenceNumber::INITIAL>;
 
@@ -54,6 +55,9 @@ static constexpr InlineSinkId INITIAL_INLINE_SINK_ID = INITIAL<InlineSinkId>;
 
 static constexpr PipelineId INVALID_PIPELINE_ID = INVALID<PipelineId>;
 static constexpr PipelineId INITIAL_PIPELINE_ID = INITIAL<PipelineId>;
+
+static constexpr TaskId INVALID_TASK_ID = INVALID<TaskId>;
+static constexpr TaskId INITIAL_TASK_ID = INITIAL<TaskId>;
 
 static constexpr ChunkNumber INVALID_CHUNK_NUMBER = INVALID<ChunkNumber>;
 static constexpr ChunkNumber INITIAL_CHUNK_NUMBER = INITIAL<ChunkNumber>;
