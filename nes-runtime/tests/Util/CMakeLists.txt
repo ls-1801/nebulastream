@@ -10,19 +10,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-include(ExternalProject)
-include(GoogleTest)
-
-# Copy Test Data
-file(COPY testData DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
-add_compile_definitions(TEST_DATA_DIRECTORY="${CMAKE_CURRENT_BINARY_DIR}/testData/")
-message(STATUS "Test Data Directory: ${TEST_DATA_DIRECTORY}/testData")
-
-function(add_nes_runtime_test)
-    add_nes_test(${ARGN})
-    set(TARGET_NAME ${ARGV0})
-    target_link_libraries(${TARGET_NAME} nes-data-types nes-runtime)
-endfunction()
-
-add_subdirectory(Util)
-add_subdirectory(UnitTests)
+add_library(nes-runtime-test-utils-lib QueryEngineTestingInfrastructure.cpp)
+target_include_directories(nes-runtime-test-utils-lib PUBLIC .)
+target_link_libraries(nes-runtime-test-utils-lib PUBLIC nes-common nes-runtime nes-executable GTest::gmock PRIVATE nes-memory-test-utils nes-sources-test-utils)

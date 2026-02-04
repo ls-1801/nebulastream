@@ -12,3 +12,4 @@
 
 add_subdirectory(Runtime)
 add_subdirectory(Util)
+add_subdirectory(QueryEngine)
