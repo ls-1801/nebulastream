@@ -380,25 +380,21 @@ std::optional<adaptive_engine::BufferHandle> AdaptiveTestSourceHandle::next_buff
     auto* wrapper = static_cast<TestBufferWrapper*>(handle.opaque);
     auto result = source_->fillTupleBuffer(wrapper->buffer, stopSource_.get_token());
 
-    switch (result)
+    if (result.isEoS())
     {
-        case Source::FillTupleBufferResult::Success:
-        {
-            // Update metadata from filled buffer
-            wrapper->metadata.sequence_number = sequenceNumber_.fetch_add(1);
-            wrapper->metadata.origin_id = sourceId_.getRawValue();
-            wrapper->metadata.watermark = wrapper->buffer.getWatermark().getRawValue();
-            wrapper->metadata.num_tuples = wrapper->buffer.getNumberOfTuples();
-            wrapper->metadata.chunk_number = static_cast<uint32_t>(wrapper->buffer.getChunkNumber().getRawValue());
-            wrapper->metadata.last_chunk = wrapper->buffer.isLastChunk();
-            return handle;
-        }
-        case Source::FillTupleBufferResult::EndOfStream:
-        case Source::FillTupleBufferResult::FailedShutdown:
-            bufferProvider_->release(handle);
-            return std::nullopt;
+        // End of stream or shutdown
+        bufferProvider_->release(handle);
+        return std::nullopt;
     }
-    std::unreachable();
+
+    // Success - update metadata from filled buffer
+    wrapper->metadata.sequence_number = sequenceNumber_.fetch_add(1);
+    wrapper->metadata.origin_id = sourceId_.getRawValue();
+    wrapper->metadata.watermark = wrapper->buffer.getWatermark().getRawValue();
+    wrapper->metadata.num_tuples = wrapper->buffer.getNumberOfTuples();
+    wrapper->metadata.chunk_number = static_cast<uint32_t>(wrapper->buffer.getChunkNumber().getRawValue());
+    wrapper->metadata.last_chunk = wrapper->buffer.isLastChunk();
+    return handle;
 }
 
 void AdaptiveTestSourceHandle::open(adaptive_engine::ExecutionContext& /*ctx*/)
@@ -668,7 +664,8 @@ void TestingHarness::start()
     }
     QueryEngineConfiguration configuration{};
     configuration.numWorkerThreads.setValue(numberOfThreads);
-    qm = std::make_unique<QueryEngine>(configuration, this->statListener, this->status, this->bm, WorkerId("test"));
+    // Use default WorkerThreadId(0) for test infrastructure
+    qm = std::make_unique<QueryEngine>(configuration, this->statListener, this->status, this->bm);
 }
 
 void TestingHarness::startQuery(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPlan> query) const

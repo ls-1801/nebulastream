@@ -22,6 +22,7 @@
 #include <Runtime/TupleBuffer.hpp>
 #include <nautilus/Engine.hpp>
 #include <adaptive_engine/PipelineStage.hpp>
+#include <ExecutablePipelineStage.hpp>
 #include <ExecutionContext.hpp>
 #include <Pipeline.hpp>
 #include <PipelineExecutionContext.hpp>
@@ -31,8 +32,8 @@ namespace NES
 class DumpHelper;
 
 /// A compiled executable pipeline stage uses nautilus-lib to compile a pipeline to a code snippet.
-/// Implements the adaptive_engine::PipelineStage interface for integration with the Rust execution engine.
-class CompiledExecutablePipelineStage final : public adaptive_engine::PipelineStage
+/// Implements both adaptive_engine::PipelineStage (for Rust execution engine) and ExecutablePipelineStage (for legacy test infrastructure).
+class CompiledExecutablePipelineStage final : public adaptive_engine::PipelineStage, public ExecutablePipelineStage
 {
 public:
     CompiledExecutablePipelineStage(
@@ -58,13 +59,28 @@ public:
     /// @return Stage identifier string
     [[nodiscard]] std::string get_id() const override;
 
+    /// --- Legacy ExecutablePipelineStage interface (for test infrastructure compatibility) ---
+
+    /// Called once when the pipeline starts (legacy interface)
+    /// @param pipelineExecutionContext Legacy execution context
+    void start(PipelineExecutionContext& pipelineExecutionContext) override;
+
+    /// Called for each input buffer to process (legacy interface)
+    /// @param inputTupleBuffer The input buffer to process
+    /// @param pipelineExecutionContext Legacy execution context
+    void execute(const TupleBuffer& inputTupleBuffer, PipelineExecutionContext& pipelineExecutionContext) override;
+
+    /// Called once when the pipeline stops (legacy interface)
+    /// @param pipelineExecutionContext Legacy execution context
+    void stop(PipelineExecutionContext& pipelineExecutionContext) override;
+
     friend std::ostream& operator<<(std::ostream& os, const CompiledExecutablePipelineStage& stage)
     {
         return stage.toString(os);
     }
 
 protected:
-    std::ostream& toString(std::ostream& os) const;
+    std::ostream& toString(std::ostream& os) const override;
 
 private:
     [[nodiscard]] nautilus::engine::CallableFunction<void, PipelineExecutionContext*, const TupleBuffer*, const Arena*>

@@ -21,13 +21,13 @@
 #include <Util/Logger/Formatter.hpp>
 #include <adaptive_engine/Engine.hpp>
 #include <CompiledQueryPlan.hpp>
+#include <ExecutablePipelineStage.hpp>
+#include <Sources/SourceHandle.hpp>
 
 namespace NES
 {
 
 class SourceProvider;
-class SourceHandle;
-class ExecutablePipelineStage;
 
 /// Internal structure for tracking instantiated pipelines with their successors.
 /// Used during the transition period while we migrate from the old execution model.
@@ -37,16 +37,21 @@ struct ExecutablePipeline
     std::unique_ptr<ExecutablePipelineStage> stage;
     std::vector<std::weak_ptr<ExecutablePipeline>> successors;
 
+    /// Constructor with all required fields
+    ExecutablePipeline(
+        PipelineId id,
+        std::unique_ptr<ExecutablePipelineStage> stage,
+        std::vector<std::weak_ptr<ExecutablePipeline>> successors)
+        : id(id), stage(std::move(stage)), successors(std::move(successors))
+    {
+    }
+
     static std::shared_ptr<ExecutablePipeline> create(
         PipelineId id,
         std::unique_ptr<ExecutablePipelineStage> stage,
         std::vector<std::weak_ptr<ExecutablePipeline>> successors)
     {
-        auto pipeline = std::make_shared<ExecutablePipeline>();
-        pipeline->id = id;
-        pipeline->stage = std::move(stage);
-        pipeline->successors = std::move(successors);
-        return pipeline;
+        return std::make_shared<ExecutablePipeline>(id, std::move(stage), std::move(successors));
     }
 };
 

@@ -24,11 +24,11 @@
 namespace NES
 {
 
-class ExecutableQueryPlan;
+struct ExecutableQueryPlan;
 class BufferManager;
-class QueryLog;
+struct QueryLog;
 class NesBufferProvider;
-class StatisticListener;
+struct StatisticListener;
 
 /// The QueryEngine wraps the adaptive_engine::Engine and provides the NES-specific
 /// interface for starting, stopping, and managing query execution.
@@ -44,13 +44,13 @@ public:
     /// @param statisticsListener Listener for query engine events (may be nullptr)
     /// @param queryLog Log for query status changes
     /// @param bufferManager Buffer manager for memory allocation
-    /// @param workerId The worker ID for this engine instance
+    /// @param workerThreadId The worker thread ID for statistics events
     QueryEngine(
         const QueryEngineConfiguration& config,
         std::shared_ptr<StatisticListener> statisticsListener,
         std::shared_ptr<QueryLog> queryLog,
         std::shared_ptr<BufferManager> bufferManager,
-        WorkerId workerId);
+        WorkerThreadId workerThreadId = WorkerThreadId(0));
 
     ~QueryEngine();
 
@@ -93,8 +93,8 @@ private:
     /// The underlying adaptive execution engine
     std::unique_ptr<adaptive_engine::Engine> engine_;
 
-    /// Worker ID for this engine instance
-    WorkerId workerId_;
+    /// Worker thread ID for statistics events
+    WorkerThreadId workerThreadId_;
 
     /// Map from NES LocalQueryId to RunningQuery
     folly::Synchronized<std::unordered_map<LocalQueryId, RunningQuery>> runningQueries_;

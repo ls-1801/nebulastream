@@ -120,8 +120,13 @@ private:
 class TestQueryStatisticListener : public StatisticListener
 {
 public:
-    MOCK_METHOD(void, onEvent, (Event), (override));
-    MOCK_METHOD(void, onEvent, (SystemEvent), (override));
+    // Use distinct names to avoid GMock ambiguity with overloaded onEvent methods
+    MOCK_METHOD(void, onQueryEvent, (Event event));
+    MOCK_METHOD(void, onSystemEvent, (SystemEvent event));
+
+    // Override the base class methods to delegate to the mock methods
+    void onEvent(Event event) override { onQueryEvent(std::move(event)); }
+    void onEvent(SystemEvent event) override { onSystemEvent(std::move(event)); }
 };
 
 /// Mock implementation for the QueryStatusListener. This allows to verify query status events, e.g. `Running`, `Stopped`.
@@ -145,7 +150,7 @@ struct ExpectStats
 \
     void apply(Name v) \
     { \
-        EXPECT_CALL(*listener, onEvent(::testing::VariantWith<NES::Name>(::testing::_))).Times(::testing::Between(v.lower, v.upper)); \
+        EXPECT_CALL(*listener, onQueryEvent(::testing::VariantWith<NES::Name>(::testing::_))).Times(::testing::Between(v.lower, v.upper)); \
     }
     STAT_TYPE(QueryStart);
     STAT_TYPE(QueryStop);
@@ -160,25 +165,25 @@ struct ExpectStats
 
     explicit ExpectStats(std::shared_ptr<TestQueryStatisticListener> listener) : listener(std::move(listener))
     {
-        EXPECT_CALL(*this->listener, onEvent(::testing::VariantWith<NES::QueryStart>(::testing::_)))
+        EXPECT_CALL(*this->listener, onQueryEvent(::testing::VariantWith<NES::QueryStart>(::testing::_)))
             .WillRepeatedly(::testing::Invoke([](auto) { }));
-        EXPECT_CALL(*this->listener, onEvent(::testing::VariantWith<NES::QueryStop>(::testing::_)))
+        EXPECT_CALL(*this->listener, onQueryEvent(::testing::VariantWith<NES::QueryStop>(::testing::_)))
             .WillRepeatedly(::testing::Invoke([](auto) { }));
-        EXPECT_CALL(*this->listener, onEvent(::testing::VariantWith<NES::PipelineStart>(::testing::_)))
+        EXPECT_CALL(*this->listener, onQueryEvent(::testing::VariantWith<NES::PipelineStart>(::testing::_)))
             .WillRepeatedly(::testing::Invoke([](auto) { }));
-        EXPECT_CALL(*this->listener, onEvent(::testing::VariantWith<NES::PipelineStop>(::testing::_)))
+        EXPECT_CALL(*this->listener, onQueryEvent(::testing::VariantWith<NES::PipelineStop>(::testing::_)))
             .WillRepeatedly(::testing::Invoke([](auto) { }));
-        EXPECT_CALL(*this->listener, onEvent(::testing::VariantWith<NES::TaskExecutionStart>(::testing::_)))
+        EXPECT_CALL(*this->listener, onQueryEvent(::testing::VariantWith<NES::TaskExecutionStart>(::testing::_)))
             .WillRepeatedly(::testing::Invoke([](auto) { }));
-        EXPECT_CALL(*this->listener, onEvent(::testing::VariantWith<NES::TaskExecutionComplete>(::testing::_)))
+        EXPECT_CALL(*this->listener, onQueryEvent(::testing::VariantWith<NES::TaskExecutionComplete>(::testing::_)))
             .WillRepeatedly(::testing::Invoke([](auto) { }));
-        EXPECT_CALL(*this->listener, onEvent(::testing::VariantWith<NES::TaskExpired>(::testing::_)))
+        EXPECT_CALL(*this->listener, onQueryEvent(::testing::VariantWith<NES::TaskExpired>(::testing::_)))
             .WillRepeatedly(::testing::Invoke([](auto) { }));
-        EXPECT_CALL(*this->listener, onEvent(::testing::VariantWith<NES::TaskEmit>(::testing::_)))
+        EXPECT_CALL(*this->listener, onQueryEvent(::testing::VariantWith<NES::TaskEmit>(::testing::_)))
             .WillRepeatedly(::testing::Invoke([](auto) { }));
-        EXPECT_CALL(*this->listener, onEvent(::testing::VariantWith<NES::QueryStopRequest>(::testing::_)))
+        EXPECT_CALL(*this->listener, onQueryEvent(::testing::VariantWith<NES::QueryStopRequest>(::testing::_)))
             .WillRepeatedly(::testing::Invoke([](auto) { }));
-        EXPECT_CALL(*this->listener, onEvent(::testing::VariantWith<NES::QueryFail>(::testing::_)))
+        EXPECT_CALL(*this->listener, onQueryEvent(::testing::VariantWith<NES::QueryFail>(::testing::_)))
             .WillRepeatedly(::testing::Invoke([](auto) { }));
     }
 
@@ -427,6 +432,7 @@ private:
     std::shared_future<void> stopFuture = stop.get_future().share();
     std::shared_future<void> destructionFuture = destruction.get_future().share();
     friend class TestSink;
+    friend class AdaptiveTestSink;
 };
 
 class TestSink final : public ExecutablePipelineStage

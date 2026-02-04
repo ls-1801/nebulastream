@@ -220,6 +220,12 @@ endif ()
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH "true")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}")
 
+# Allow multiple definitions for cxx runtime symbols that appear in both
+# nes_rust_bindings and adaptive_engine static libraries
+if (UNIX AND NOT APPLE)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--allow-multiple-definition")
+endif()
+
 # Add tests with command
 include(cmake/NebulaStreamTest.cmake)
 if (NES_ENABLES_TESTS)

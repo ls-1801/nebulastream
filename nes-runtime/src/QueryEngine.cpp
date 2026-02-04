@@ -36,12 +36,12 @@ QueryEngine::QueryEngine(
     std::shared_ptr<StatisticListener> statisticsListener,
     std::shared_ptr<QueryLog> queryLog,
     std::shared_ptr<BufferManager> bufferManager,
-    WorkerId workerId)
+    WorkerThreadId workerThreadId)
     : config_(config)
     , statisticsListener_(std::move(statisticsListener))
     , queryLog_(std::move(queryLog))
     , bufferProvider_(std::make_unique<NesBufferProvider>(std::move(bufferManager)))
-    , workerId_(workerId)
+    , workerThreadId_(workerThreadId)
 {
     NES_INFO("Creating QueryEngine with {} worker threads", config_.numWorkerThreads.getValue());
 
@@ -104,7 +104,7 @@ void QueryEngine::start(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPla
     // Emit statistics event
     if (statisticsListener_)
     {
-        statisticsListener_->onEvent(QueryStart(WorkerThreadId(workerId_.getRawValue()), queryId));
+        static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())->onEvent(QueryStart(workerThreadId_, queryId));
     }
 
     NES_INFO("Query {} started with engine query ID {}", queryId, engineQueryId);
@@ -117,7 +117,7 @@ void QueryEngine::stop(LocalQueryId queryId)
     // Emit stop request event
     if (statisticsListener_)
     {
-        statisticsListener_->onEvent(QueryStopRequest(WorkerThreadId(workerId_.getRawValue()), queryId));
+        static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())->onEvent(QueryStopRequest(workerThreadId_, queryId));
     }
 
     // Find and remove the query
@@ -155,7 +155,7 @@ void QueryEngine::stop(LocalQueryId queryId)
         // Emit statistics event
         if (statisticsListener_)
         {
-            statisticsListener_->onEvent(QueryStop(WorkerThreadId(workerId_.getRawValue()), queryId));
+            static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())->onEvent(QueryStop(workerThreadId_, queryId));
         }
     }
     else

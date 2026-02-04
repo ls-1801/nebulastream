@@ -247,4 +247,34 @@ std::string CompiledExecutablePipelineStage::get_id() const
     return stageId_;
 }
 
+// --- Legacy ExecutablePipelineStage interface implementations ---
+
+void CompiledExecutablePipelineStage::start(PipelineExecutionContext& pipelineExecutionContext)
+{
+    pipelineExecutionContext.setOperatorHandlers(operatorHandlers);
+
+    Arena arena(pipelineExecutionContext.getBufferManager());
+    ExecutionContext nesCtx(std::addressof(pipelineExecutionContext), std::addressof(arena));
+    CompilationContext compilationCtx{engine};
+    pipeline->getRootOperator().setup(nesCtx, compilationCtx);
+    compiledPipelineFunction = this->compilePipeline();
+}
+
+void CompiledExecutablePipelineStage::execute(const TupleBuffer& inputTupleBuffer, PipelineExecutionContext& pipelineExecutionContext)
+{
+    pipelineExecutionContext.setOperatorHandlers(operatorHandlers);
+
+    Arena arena(pipelineExecutionContext.getBufferManager());
+    compiledPipelineFunction(std::addressof(pipelineExecutionContext), std::addressof(inputTupleBuffer), std::addressof(arena));
+}
+
+void CompiledExecutablePipelineStage::stop(PipelineExecutionContext& pipelineExecutionContext)
+{
+    pipelineExecutionContext.setOperatorHandlers(operatorHandlers);
+
+    Arena arena(pipelineExecutionContext.getBufferManager());
+    ExecutionContext nesCtx(std::addressof(pipelineExecutionContext), std::addressof(arena));
+    pipeline->getRootOperator().terminate(nesCtx);
+}
+
 }

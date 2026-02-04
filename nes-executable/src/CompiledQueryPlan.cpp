@@ -27,13 +27,15 @@ std::unique_ptr<CompiledQueryPlan> CompiledQueryPlan::create(
     std::vector<SourceInfo> sources,
     std::vector<SinkInfo> sinks)
 {
-    auto plan = std::make_unique<CompiledQueryPlan>();
-    plan->localQueryId = localQueryId;
-    plan->stages = std::move(stages);
-    plan->edges = std::move(edges);
-    plan->sources = std::move(sources);
-    plan->sinks = std::move(sinks);
-    return plan;
+    // Use raw new since make_unique requires default constructor
+    auto* rawPlan = new CompiledQueryPlan{
+        std::move(localQueryId),
+        std::move(stages),
+        std::move(edges),
+        std::move(sources),
+        std::move(sinks)
+    };
+    return std::unique_ptr<CompiledQueryPlan>(rawPlan);
 }
 
 }  // namespace NES
