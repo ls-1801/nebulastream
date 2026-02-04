@@ -15,9 +15,13 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
+#include <thread>
 #include <unordered_map>
+#include <vector>
 #include <Identifiers/Identifiers.hpp>
 #include <QueryEngineConfiguration.hpp>
+#include <Runtime/QueryTerminationType.hpp>
 #include <adaptive_engine/Engine.hpp>
 #include <folly/Synchronized.h>
 
@@ -25,10 +29,12 @@ namespace NES
 {
 
 struct ExecutableQueryPlan;
+struct ExecutablePipeline;
 class BufferManager;
 struct QueryLog;
 class NesBufferProvider;
 struct StatisticListener;
+class PipelineExecutionContext;
 
 /// The QueryEngine wraps the adaptive_engine::Engine and provides the NES-specific
 /// interface for starting, stopping, and managing query execution.
@@ -36,6 +42,11 @@ struct StatisticListener;
 /// This class bridges the gap between NES's query management (using LocalQueryId and
 /// ExecutableQueryPlan) and the adaptive_engine's execution model (using QueryId and
 /// QueryPlan).
+///
+/// For backward compatibility with tests using the legacy ExecutablePipelineStage interface,
+/// this class supports two execution paths:
+/// 1. Legacy path: Uses ExecutablePipeline structures with SourceHandle (when adaptiveStages is empty)
+/// 2. Adaptive path: Uses adaptive_engine::QueryPlan (when adaptiveStages is populated)
 class QueryEngine
 {
 public:
@@ -71,11 +82,26 @@ public:
     void stop(LocalQueryId queryId);
 
 private:
+    /// Start a query using the legacy ExecutablePipeline path
+    void startLegacy(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPlan> plan);
+
+    /// Start a query using the adaptive_engine path
+    void startAdaptive(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPlan> plan);
+
+    /// Stop a query using the legacy path
+    void stopLegacy(LocalQueryId queryId);
+
+    /// Process a source termination event (EoS or error)
+    void handleSourceTermination(LocalQueryId queryId, OriginId sourceId, QueryTerminationType type);
+
     /// Internal representation of a running query
     struct RunningQuery
     {
-        adaptive_engine::QueryId engineQueryId;
+        adaptive_engine::QueryId engineQueryId{0};
         std::unique_ptr<ExecutableQueryPlan> plan;
+        bool isLegacy{false};
+        size_t sourcesFinished{0};
+        size_t totalSources{0};
     };
 
     /// Configuration for the engine
@@ -86,6 +112,9 @@ private:
 
     /// Query log for status changes
     std::shared_ptr<QueryLog> queryLog_;
+
+    /// Buffer manager for allocations (kept for legacy path)
+    std::shared_ptr<BufferManager> bufferManager_;
 
     /// Buffer provider wrapping the NES buffer manager
     std::unique_ptr<NesBufferProvider> bufferProvider_;
@@ -98,6 +127,10 @@ private:
 
     /// Map from NES LocalQueryId to RunningQuery
     folly::Synchronized<std::unordered_map<LocalQueryId, RunningQuery>> runningQueries_;
+
+    /// Cleanup threads for deferred pipeline shutdown
+    std::mutex cleanupThreadsMutex_;
+    std::vector<std::thread> cleanupThreads_;
 };
 
 }  // namespace NES
