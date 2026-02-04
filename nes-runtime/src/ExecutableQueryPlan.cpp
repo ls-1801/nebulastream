@@ -16,20 +16,19 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <iterator>
 #include <memory>
 #include <ostream>
 #include <unordered_map>
 #include <utility>
-#include <variant>
 #include <vector>
 #include <Identifiers/Identifiers.hpp>
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <Sinks/SinkProvider.hpp>
 #include <Sources/SourceHandle.hpp>
 #include <Sources/SourceProvider.hpp>
-#include <Util/Overloaded.hpp>
 #include <BackpressureChannel.hpp>
 #include <CompiledQueryPlan.hpp>
 #include <ErrorHandling.hpp>
@@ -44,10 +43,13 @@ std::ostream& operator<<(std::ostream& os, const ExecutableQueryPlan& instantiat
         = [&os, &printNode](const std::weak_ptr<ExecutablePipeline>& weakPipeline, size_t indent)
     {
         auto pipeline = weakPipeline.lock();
-        os << std::string(indent * 4, ' ') << *pipeline->stage << "(" << pipeline->id << ")" << '\n';
-        for (const auto& successor : pipeline->successors)
+        if (pipeline && pipeline->stage)
         {
-            printNode(successor, indent + 1);
+            os << std::string(indent * 4, ' ') << *pipeline->stage << "(" << pipeline->id << ")" << '\n';
+            for (const auto& successor : pipeline->successors)
+            {
+                printNode(successor, indent + 1);
+            }
         }
     };
 
@@ -65,9 +67,8 @@ std::ostream& operator<<(std::ostream& os, const ExecutableQueryPlan& instantiat
 std::unique_ptr<ExecutableQueryPlan>
 ExecutableQueryPlan::instantiate(CompiledQueryPlan& compiledQueryPlan, const SourceProvider& sourceProvider)
 {
-    std::vector<SourceWithSuccessor> instantiatedSources;
-
-    std::unordered_map<OperatorId, std::vector<std::shared_ptr<ExecutablePipeline>>> instantiatedSinksWithSourcePredecessor;
+    std::vector<ExecutableQueryPlan::SourceWithSuccessor> instantiatedSources;
+    std::vector<std::shared_ptr<ExecutablePipeline>> pipelines;
 
     auto [backpressureController, backpressureListener] = createBackpressureChannel();
 
@@ -76,37 +77,67 @@ ExecutableQueryPlan::instantiate(CompiledQueryPlan& compiledQueryPlan, const Sou
         throw NotImplemented("Currently our execution model expects exactly one sink per query plan");
     }
 
-    auto& [pipelineId, descriptor, predecessors] = compiledQueryPlan.sinks.front();
+    // Take ownership of the adaptive stages from the compiled plan
+    // These implement adaptive_engine::PipelineStage (CompiledExecutablePipelineStage)
+    std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> ownedAdaptiveStages = std::move(compiledQueryPlan.stages);
 
-    auto sink = ExecutablePipeline::create(pipelineId, lower(std::move(backpressureController), descriptor), {});
-    compiledQueryPlan.pipelines.push_back(sink);
-    for (const auto& predecessor : predecessors)
+    // Take the edges from the compiled plan
+    std::vector<adaptive_engine::Edge> edges = std::move(compiledQueryPlan.edges);
+
+    // Create sink using the legacy interface
+    auto& sinkInfo = compiledQueryPlan.sinks.front();
+    auto sink = ExecutablePipeline::create(
+        sinkInfo.pipelineId, lower(std::move(backpressureController), sinkInfo.descriptor), {});
+    pipelines.push_back(sink);
+
+    // Build a map from stage index to ExecutablePipeline for linking
+    // Note: In the new model, stages are already built. For legacy compatibility, we wrap the adaptive
+    // stages in ExecutablePipeline but they don't really "own" the stage (it's owned by ownedAdaptiveStages).
+    // The actual execution will use the adaptive stages directly in US-031.
+
+    // Track which sources feed directly to sink (source -> sink case without intermediate stages)
+    std::unordered_map<OperatorId, bool> sourceFeedsSink;
+    for (const auto& srcId : sinkInfo.predecessor_sources)
     {
-        std::visit(
-            Overloaded{
-                [&](const OperatorId& source) { instantiatedSinksWithSourcePredecessor[source].push_back(sink); },
-                [&](const std::weak_ptr<ExecutablePipeline>& pipeline) { pipeline.lock()->successors.push_back(sink); },
-            },
-            predecessor);
+        sourceFeedsSink[srcId] = true;
     }
 
-
-    for (auto [originId, operatorId, descriptor, successors] : compiledQueryPlan.sources)
+    // Create sources from descriptors
+    for (const auto& sourceInfo : compiledQueryPlan.sources)
     {
-        std::ranges::copy(instantiatedSinksWithSourcePredecessor[operatorId], std::back_inserter(successors));
-        instantiatedSources.emplace_back(sourceProvider.lower(originId, backpressureListener, descriptor), std::move(successors));
-    }
+        std::vector<std::weak_ptr<ExecutablePipeline>> successorPipelines;
 
+        // If source feeds directly to sink, add sink as successor
+        if (sourceFeedsSink.contains(sourceInfo.operatorId))
+        {
+            successorPipelines.push_back(sink);
+        }
+
+        // Create the source handle
+        auto sourceHandle = sourceProvider.lower(sourceInfo.originId, backpressureListener, sourceInfo.descriptor);
+
+        instantiatedSources.emplace_back(std::move(sourceHandle), std::move(successorPipelines));
+    }
 
     return std::make_unique<ExecutableQueryPlan>(
-        compiledQueryPlan.localQueryId, compiledQueryPlan.pipelines, std::move(instantiatedSources));
+        compiledQueryPlan.localQueryId,
+        std::move(pipelines),
+        std::move(instantiatedSources),
+        std::move(ownedAdaptiveStages),
+        std::move(edges));
 }
 
 ExecutableQueryPlan::ExecutableQueryPlan(
     LocalQueryId localQueryId,
     std::vector<std::shared_ptr<ExecutablePipeline>> pipelines,
-    std::vector<SourceWithSuccessor> instantiatedSources)
-    : localQueryId(localQueryId), pipelines(std::move(pipelines)), sources(std::move(instantiatedSources))
+    std::vector<SourceWithSuccessor> instantiatedSources,
+    std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> ownedAdaptiveStages,
+    std::vector<adaptive_engine::Edge> edges)
+    : localQueryId(localQueryId)
+    , pipelines(std::move(pipelines))
+    , sources(std::move(instantiatedSources))
+    , ownedAdaptiveStages_(std::move(ownedAdaptiveStages))
+    , edges_(std::move(edges))
 {
 }
-}
+}  // namespace NES

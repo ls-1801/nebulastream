@@ -15,12 +15,13 @@
 #include <Phases/LowerToCompiledQueryPlanPhase.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <ranges>
+#include <string>
 #include <unordered_map>
 #include <utility>
-#include <variant>
 #include <vector>
 #include <Configuration/WorkerConfiguration.hpp>
 #include <Identifiers/Identifiers.hpp>
@@ -30,7 +31,6 @@
 #include <Util/ExecutionMode.hpp>
 #include <CompiledQueryPlan.hpp>
 #include <ErrorHandling.hpp>
-#include <ExecutablePipelineStage.hpp>
 #include <Pipeline.hpp>
 #include <PipelinedQueryPlan.hpp>
 #include <SinkPhysicalOperator.hpp>
@@ -40,15 +40,17 @@
 namespace NES
 {
 
-LowerToCompiledQueryPlanPhase::Successor
-LowerToCompiledQueryPlanPhase::processSuccessor(const Predecessor& predecessor, const std::shared_ptr<Pipeline>& pipeline)
+std::optional<uint64_t> LowerToCompiledQueryPlanPhase::processSuccessor(
+    const std::optional<uint64_t>& predecessorStageIndex,
+    const std::optional<OperatorId>& sourceOperatorId,
+    const std::shared_ptr<Pipeline>& pipeline)
 {
     PRECONDITION(pipeline->isSinkPipeline() || pipeline->isOperatorPipeline(), "expected a Sink or OperatorPipeline");
 
     if (pipeline->isSinkPipeline())
     {
-        processSink(predecessor, pipeline);
-        return {};
+        processSink(predecessorStageIndex, sourceOperatorId, pipeline);
+        return std::nullopt;
     }
     return processOperatorPipeline(pipeline);
 }
@@ -57,35 +59,55 @@ void LowerToCompiledQueryPlanPhase::processSource(const std::shared_ptr<Pipeline
 {
     PRECONDITION(pipeline->isSourcePipeline(), "expected a SourcePipeline {}", *pipeline);
 
-    /// Convert logical source descriptor to actual source descriptor
     const auto sourceOperator = pipeline->getRootOperator().get<SourcePhysicalOperator>();
 
-    std::vector<std::weak_ptr<ExecutablePipeline>> executableSuccessorPipelines;
+    CompiledQueryPlan::SourceInfo sourceInfo{
+        .originId = sourceOperator.getOriginId(),
+        .operatorId = sourceOperator.id,
+        .descriptor = sourceOperator.getDescriptor(),
+        .target_stage_indices = {}};
 
     for (const auto& successor : pipeline->getSuccessors())
     {
-        if (auto executableSuccessor = processSuccessor(sourceOperator.id, successor))
+        if (auto stageIndex = processSuccessor(std::nullopt, sourceOperator.id, successor))
         {
-            executableSuccessorPipelines.emplace_back(*executableSuccessor);
+            sourceInfo.target_stage_indices.push_back(*stageIndex);
         }
     }
-    sources.emplace_back(
-        sourceOperator.getOriginId(), sourceOperator.id, sourceOperator.getDescriptor(), std::move(executableSuccessorPipelines));
+
+    sources_.push_back(std::move(sourceInfo));
 }
 
-void LowerToCompiledQueryPlanPhase::processSink(const Predecessor& predecessor, const std::shared_ptr<Pipeline>& pipeline)
+void LowerToCompiledQueryPlanPhase::processSink(
+    const std::optional<uint64_t>& predecessorStageIndex,
+    const std::optional<OperatorId>& sourceOperatorId,
+    const std::shared_ptr<Pipeline>& pipeline)
 {
-    const auto sinkOperator = pipeline->getRootOperator().get<SinkPhysicalOperator>().getDescriptor();
-    auto it = std::ranges::find(sinks, pipeline->getPipelineId(), &CompiledQueryPlan::Sink::id);
-    if (it == sinks.end())
+    const auto sinkDescriptor = pipeline->getRootOperator().get<SinkPhysicalOperator>().getDescriptor();
+
+    auto it = std::ranges::find(sinks_, pipeline->getPipelineId(), &CompiledQueryPlan::SinkInfo::pipelineId);
+    if (it == sinks_.end())
     {
-        sinks.emplace_back(pipeline->getPipelineId(), sinkOperator, std::vector<Predecessor>{});
-        it = sinks.end() - 1;
+        sinks_.emplace_back(CompiledQueryPlan::SinkInfo{
+            .pipelineId = PipelineId(pipeline->getPipelineId()),
+            .descriptor = sinkDescriptor,
+            .predecessor_stage_indices = {},
+            .predecessor_sources = {}});
+        it = sinks_.end() - 1;
     }
-    it->predecessor.emplace_back(predecessor);
+
+    if (predecessorStageIndex.has_value())
+    {
+        it->predecessor_stage_indices.push_back(*predecessorStageIndex);
+    }
+    if (sourceOperatorId.has_value())
+    {
+        it->predecessor_sources.push_back(*sourceOperatorId);
+    }
 }
 
-std::unique_ptr<ExecutablePipelineStage> LowerToCompiledQueryPlanPhase::getStage(const std::shared_ptr<Pipeline>& pipeline)
+std::unique_ptr<adaptive_engine::PipelineStage>
+LowerToCompiledQueryPlanPhase::getStage(const std::shared_ptr<Pipeline>& pipeline)
 {
     nautilus::engine::Options options;
     /// We disable multithreading in MLIR by default to not interfere with NebulaStream's thread model
@@ -128,43 +150,56 @@ std::unique_ptr<ExecutablePipelineStage> LowerToCompiledQueryPlanPhase::getStage
             options.setOption("dump.file", true);
             break;
     }
-    return std::make_unique<CompiledExecutablePipelineStage>(pipeline, pipeline->getOperatorHandlers(), options);
+
+    auto stageId = std::to_string(pipeline->getPipelineId().getRawValue());
+    return std::make_unique<CompiledExecutablePipelineStage>(pipeline, pipeline->getOperatorHandlers(), options, stageId);
 }
 
-std::shared_ptr<ExecutablePipeline> LowerToCompiledQueryPlanPhase::processOperatorPipeline(const std::shared_ptr<Pipeline>& pipeline)
+uint64_t LowerToCompiledQueryPlanPhase::processOperatorPipeline(const std::shared_ptr<Pipeline>& pipeline)
 {
-    /// check if the particular pipeline already exist in the pipeline map.
-    if (const auto executable = pipelineToExecutableMap.find(pipeline->getPipelineId()); executable != pipelineToExecutableMap.end())
+    /// Check if the particular pipeline already exists in the map
+    if (const auto it = pipelineToStageIndex_.find(pipeline->getPipelineId()); it != pipelineToStageIndex_.end())
     {
-        return executable->second;
+        return it->second;
     }
-    auto executablePipeline = ExecutablePipeline::create(PipelineId(pipeline->getPipelineId()), getStage(pipeline), {});
 
+    /// Create the stage and get its index
+    auto stageIndex = static_cast<uint64_t>(stages_.size());
+    stages_.push_back(getStage(pipeline));
+    pipelineToStageIndex_.emplace(pipeline->getPipelineId(), stageIndex);
+
+    /// Process successors and create edges
     for (const auto& successor : pipeline->getSuccessors())
     {
-        if (auto executableSuccessor = processSuccessor(executablePipeline, successor))
+        if (auto successorStageIndex = processSuccessor(stageIndex, std::nullopt, successor))
         {
-            executablePipeline->successors.emplace_back(*executableSuccessor);
+            edges_.push_back(adaptive_engine::Edge{.source_stage = stageIndex, .target_stage = *successorStageIndex});
         }
     }
 
-    pipelineToExecutableMap.emplace(pipeline->getPipelineId(), executablePipeline);
-    return executablePipeline;
+    return stageIndex;
 }
 
-std::unique_ptr<CompiledQueryPlan> LowerToCompiledQueryPlanPhase::apply(const std::shared_ptr<PipelinedQueryPlan>& pipelineQueryPlan)
+std::unique_ptr<CompiledQueryPlan>
+LowerToCompiledQueryPlanPhase::apply(const std::shared_ptr<PipelinedQueryPlan>& pipelineQueryPlan)
 {
     this->pipelineQueryPlan = pipelineQueryPlan;
 
-    /// Process all pipelines recursively.
+    /// Clear state for this compilation
+    stages_.clear();
+    edges_.clear();
+    sources_.clear();
+    sinks_.clear();
+    pipelineToStageIndex_.clear();
+
+    /// Process all pipelines recursively starting from sources
     for (auto sourcePipelines = pipelineQueryPlan->getSourcePipelines(); const auto& pipeline : sourcePipelines)
     {
         processSource(pipeline);
     }
 
-    auto pipelines = std::move(pipelineToExecutableMap) | std::views::values | std::ranges::to<std::vector>();
-
-    return CompiledQueryPlan::create(pipelineQueryPlan->getQueryId(), std::move(pipelines), std::move(sinks), std::move(sources));
+    return CompiledQueryPlan::create(
+        pipelineQueryPlan->getQueryId(), std::move(stages_), std::move(edges_), std::move(sources_), std::move(sinks_));
 }
 
-}
+}  // namespace NES

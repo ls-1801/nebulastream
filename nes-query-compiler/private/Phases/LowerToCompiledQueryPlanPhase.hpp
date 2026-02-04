@@ -14,13 +14,15 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <unordered_map>
-#include <variant>
 #include <vector>
 
 #include <Identifiers/Identifiers.hpp>
 #include <Util/DumpMode.hpp>
+#include <adaptive_engine/PipelineStage.hpp>
 #include <CompiledQueryPlan.hpp>
 #include <PipelinedQueryPlan.hpp>
 
@@ -37,24 +39,40 @@ public:
     std::unique_ptr<CompiledQueryPlan> apply(const std::shared_ptr<PipelinedQueryPlan>& pipelineQueryPlan);
 
 private:
-    using Predecessor = std::variant<OperatorId, std::weak_ptr<ExecutablePipeline>>;
-    using Successor = std::optional<std::shared_ptr<ExecutablePipeline>>;
+    /// Process successors recursively, creating stages and tracking edges
+    /// Returns the stage index if a stage was created/found
+    std::optional<uint64_t> processSuccessor(
+        const std::optional<uint64_t>& predecessorStageIndex,
+        const std::optional<OperatorId>& sourceOperatorId,
+        const std::shared_ptr<Pipeline>& pipeline);
 
-    std::shared_ptr<ExecutablePipeline> processOperatorPipeline(const std::shared_ptr<Pipeline>& pipeline);
-    void processSink(const Predecessor& predecessor, const std::shared_ptr<Pipeline>& pipeline);
-    Successor processSuccessor(const Predecessor& predecessor, const std::shared_ptr<Pipeline>& pipeline);
+    /// Process a source pipeline
     void processSource(const std::shared_ptr<Pipeline>& pipeline);
 
-    std::unique_ptr<ExecutablePipelineStage> getStage(const std::shared_ptr<Pipeline>& pipeline);
+    /// Process a sink pipeline
+    void processSink(
+        const std::optional<uint64_t>& predecessorStageIndex,
+        const std::optional<OperatorId>& sourceOperatorId,
+        const std::shared_ptr<Pipeline>& pipeline);
 
-    /// Lowering context
-    std::vector<CompiledQueryPlan::Sink> sinks;
-    std::vector<CompiledQueryPlan::Source> sources;
-    std::unordered_map<PipelineId, std::shared_ptr<ExecutablePipeline>> pipelineToExecutableMap;
+    /// Process an operator pipeline, creating a stage
+    uint64_t processOperatorPipeline(const std::shared_ptr<Pipeline>& pipeline);
+
+    /// Create a pipeline stage from a Pipeline
+    std::unique_ptr<adaptive_engine::PipelineStage> getStage(const std::shared_ptr<Pipeline>& pipeline);
+
+    /// Lowering context - populated during apply()
+    std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> stages_;
+    std::vector<adaptive_engine::Edge> edges_;
+    std::vector<CompiledQueryPlan::SourceInfo> sources_;
+    std::vector<CompiledQueryPlan::SinkInfo> sinks_;
+
+    /// Map from PipelineId to stage index for deduplication
+    std::unordered_map<PipelineId, uint64_t> pipelineToStageIndex_;
 
     std::shared_ptr<PipelinedQueryPlan> pipelineQueryPlan;
 
     /// Config parameter
     DumpMode dumpQueryCompilationIntermediateRepresentations;
 };
-}
+}  // namespace NES
