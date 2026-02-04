@@ -14,10 +14,11 @@ add_subdirectory(src)
 get_source(nes-sources NES_SOURCES_SOURCE_FILES)
 
 add_library(nes-sources ${NES_SOURCES_SOURCE_FILES})
-target_link_libraries(nes-sources PUBLIC nes-common nes-configurations nes-memory nes-input-formatters nes-executable)
+target_link_libraries(nes-sources PUBLIC nes-common nes-configurations nes-memory nes-input-formatters nes-executable adaptive_engine_cpp)
 
 target_include_directories(nes-sources PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../cpp/include>
         $<INSTALL_INTERFACE:include/nebulastream/>
         PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/private>)
 

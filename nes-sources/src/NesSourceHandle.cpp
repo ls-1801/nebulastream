@@ -1,0 +1,159 @@
+/*
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        https://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+*/
+
+#include <NesSourceHandle.hpp>
+
+#include <chrono>
+#include <optional>
+#include <string>
+#include <utility>
+#include <adaptive_engine/Buffer.hpp>
+#include <adaptive_engine/ExecutionContext.hpp>
+#include <Identifiers/Identifiers.hpp>
+#include <Runtime/TupleBuffer.hpp>
+#include <Time/Timestamp.hpp>
+#include <ErrorHandling.hpp>
+#include <Util/Logger/Logger.hpp>
+#include <fmt/format.h>
+
+namespace NES
+{
+
+namespace
+{
+
+/// Internal wrapper that holds a TupleBuffer and its cached metadata for the adaptive engine.
+/// This is allocated on the heap and stored as the opaque pointer in BufferHandle.
+/// Note: This mirrors NesBufferWrapper in nes-runtime but is defined locally to avoid
+/// a circular dependency between nes-sources and nes-runtime.
+struct SourceBufferWrapper
+{
+    TupleBuffer buffer;
+    adaptive_engine::BufferMetadata metadata;
+
+    explicit SourceBufferWrapper(TupleBuffer buf) : buffer(std::move(buf)), metadata{}
+    {
+        // Extract metadata from the TupleBuffer
+        metadata.sequence_number = buffer.getSequenceNumber().getRawValue();
+        metadata.origin_id = buffer.getOriginId().getRawValue();
+        metadata.watermark = buffer.getWatermark().getRawValue();
+        metadata.num_tuples = buffer.getNumberOfTuples();
+        metadata.chunk_number = static_cast<uint32_t>(buffer.getChunkNumber().getRawValue());
+        metadata.last_chunk = buffer.isLastChunk();
+    }
+};
+
+}  // namespace
+
+NesSourceHandle::NesSourceHandle(
+    std::unique_ptr<Source> source,
+    OriginId originId,
+    std::shared_ptr<AbstractBufferProvider> bufferProvider)
+    : source_(std::move(source)), originId_(originId), bufferProvider_(std::move(bufferProvider))
+{
+    PRECONDITION(source_ != nullptr, "NesSourceHandle requires a valid Source");
+    PRECONDITION(bufferProvider_ != nullptr, "NesSourceHandle requires a valid buffer provider");
+}
+
+std::optional<adaptive_engine::BufferHandle> NesSourceHandle::next_buffer(adaptive_engine::ExecutionContext& /*ctx*/)
+{
+    PRECONDITION(opened_, "Source must be opened before calling next_buffer");
+
+    // Get stop token for this source
+    std::stop_token stopToken = stopSource_.get_token();
+    if (stopToken.stop_requested())
+    {
+        return std::nullopt;
+    }
+
+    // Allocate a buffer from the buffer provider
+    // Try to get a pooled buffer with timeout
+    std::optional<TupleBuffer> buffer;
+    while (!buffer && !stopToken.stop_requested())
+    {
+        buffer = bufferProvider_->getBufferWithTimeout(std::chrono::milliseconds(25));
+    }
+
+    if (stopToken.stop_requested() || !buffer.has_value())
+    {
+        return std::nullopt;
+    }
+
+    // Fill the buffer using the underlying Source
+    Source::FillTupleBufferResult result = source_->fillTupleBuffer(*buffer, stopToken);
+
+    if (result.isEoS())
+    {
+        // End of stream - source is exhausted
+        NES_DEBUG("NesSourceHandle {}: End of stream", originId_);
+        return std::nullopt;
+    }
+
+    // Set buffer metadata
+    const bool requiresMetadata = !source_->addsMetadata();
+    if (requiresMetadata)
+    {
+        buffer->setOriginId(originId_);
+        buffer->setSequenceNumber(SequenceNumber(sequenceNumber_.fetch_add(1)));
+        buffer->setCreationTimestampInMS(Timestamp(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::high_resolution_clock::now().time_since_epoch())
+                .count()));
+        buffer->setChunkNumber(INITIAL_CHUNK_NUMBER);
+        buffer->setLastChunk(true);
+    }
+
+    // Set the number of bytes read (Source uses this to communicate size)
+    buffer->setNumberOfTuples(result.getNumberOfBytes());
+
+    // Wrap the TupleBuffer into a BufferHandle
+    // Create a SourceBufferWrapper on the heap (follows same pattern as NesBufferWrapper)
+    auto* wrapper = new SourceBufferWrapper(std::move(*buffer));
+
+    return adaptive_engine::BufferHandle{wrapper};
+}
+
+void NesSourceHandle::open(adaptive_engine::ExecutionContext& /*ctx*/)
+{
+    PRECONDITION(!opened_, "Source is already opened");
+
+    NES_DEBUG("NesSourceHandle {}: Opening source", originId_);
+    source_->open(bufferProvider_);
+    opened_ = true;
+}
+
+void NesSourceHandle::close(adaptive_engine::ExecutionContext& /*ctx*/)
+{
+    if (!opened_)
+    {
+        return;
+    }
+
+    NES_DEBUG("NesSourceHandle {}: Closing source", originId_);
+    stopSource_.request_stop();
+    source_->close();
+    opened_ = false;
+}
+
+std::string NesSourceHandle::get_id() const
+{
+    return fmt::format("source-{}", originId_.getRawValue());
+}
+
+void NesSourceHandle::request_stop()
+{
+    stopSource_.request_stop();
+}
+
+}  // namespace NES
