@@ -54,6 +54,11 @@
 #include <QueryEngine.hpp>
 #include <QueryEngineConfiguration.hpp>
 #include <TestSource.hpp>
+#include <adaptive_engine/Buffer.hpp>
+#include <adaptive_engine/ExecutionContext.hpp>
+#include <adaptive_engine/PipelineStage.hpp>
+#include <adaptive_engine/SourceHandle.hpp>
+#include <MemoryTestUtils.hpp>
 
 namespace NES::Testing
 {
@@ -123,6 +128,300 @@ std::vector<TupleBuffer> TestSinkController::takeBuffers()
 std::ostream& TestSink::toString(std::ostream& os) const
 {
     return os << "TestSink";
+}
+
+// ============================================================================
+// TestBufferWrapper implementation
+// ============================================================================
+
+TestBufferWrapper::TestBufferWrapper(TupleBuffer buf) : buffer(std::move(buf)), metadata{}
+{
+    metadata.sequence_number = buffer.getSequenceNumber().getRawValue();
+    metadata.origin_id = buffer.getOriginId().getRawValue();
+    metadata.watermark = buffer.getWatermark().getRawValue();
+    metadata.num_tuples = buffer.getNumberOfTuples();
+    metadata.chunk_number = static_cast<uint32_t>(buffer.getChunkNumber().getRawValue());
+    metadata.last_chunk = buffer.isLastChunk();
+}
+
+// ============================================================================
+// TestBufferProvider implementation
+// ============================================================================
+
+TestBufferProvider::TestBufferProvider(std::shared_ptr<AbstractBufferProvider> nesProvider)
+    : nesProvider_(std::move(nesProvider))
+{
+    INVARIANT(nesProvider_ != nullptr, "TestBufferProvider requires a valid AbstractBufferProvider");
+}
+
+adaptive_engine::BufferHandle TestBufferProvider::wrap(void* data, size_t /*size*/, const adaptive_engine::BufferMetadata& /*metadata*/)
+{
+    INVARIANT(data != nullptr, "Cannot wrap null TupleBuffer pointer");
+
+    auto* tupleBufferPtr = static_cast<TupleBuffer*>(data);
+    tupleBufferPtr->retain();
+    auto* wrapper = new TestBufferWrapper(*tupleBufferPtr);
+    tupleBufferPtr->release();
+
+    return adaptive_engine::BufferHandle{wrapper};
+}
+
+void TestBufferProvider::release(adaptive_engine::BufferHandle handle)
+{
+    if (handle.opaque == nullptr)
+    {
+        return;
+    }
+    delete static_cast<TestBufferWrapper*>(handle.opaque);
+}
+
+void* TestBufferProvider::get_data(adaptive_engine::BufferHandle handle)
+{
+    INVARIANT(handle.opaque != nullptr, "Cannot get data from null handle");
+    auto* wrapper = static_cast<TestBufferWrapper*>(handle.opaque);
+    return wrapper->buffer.getAvailableMemoryArea<uint8_t>().data();
+}
+
+size_t TestBufferProvider::get_size(adaptive_engine::BufferHandle handle)
+{
+    INVARIANT(handle.opaque != nullptr, "Cannot get size from null handle");
+    auto* wrapper = static_cast<TestBufferWrapper*>(handle.opaque);
+    return wrapper->buffer.getBufferSize();
+}
+
+const adaptive_engine::BufferMetadata& TestBufferProvider::get_metadata(adaptive_engine::BufferHandle handle)
+{
+    INVARIANT(handle.opaque != nullptr, "Cannot get metadata from null handle");
+    auto* wrapper = static_cast<TestBufferWrapper*>(handle.opaque);
+    return wrapper->metadata;
+}
+
+adaptive_engine::BufferHandle TestBufferProvider::allocate(size_t size)
+{
+    INVARIANT(nesProvider_ != nullptr, "Buffer provider not initialized");
+
+    std::optional<TupleBuffer> buffer;
+    if (size <= nesProvider_->getBufferSize())
+    {
+        buffer = nesProvider_->getBufferNoBlocking();
+    }
+    else
+    {
+        buffer = nesProvider_->getUnpooledBuffer(size);
+    }
+
+    if (!buffer.has_value())
+    {
+        return adaptive_engine::BufferHandle{nullptr};
+    }
+
+    auto* wrapper = new TestBufferWrapper(std::move(buffer.value()));
+    return adaptive_engine::BufferHandle{wrapper};
+}
+
+// ============================================================================
+// AdaptiveTestPipeline implementation
+// ============================================================================
+
+AdaptiveTestPipeline::AdaptiveTestPipeline(std::shared_ptr<TestPipelineController> controller, std::string stageId)
+    : controller_(std::move(controller)), stageId_(std::move(stageId))
+{
+}
+
+AdaptiveTestPipeline::~AdaptiveTestPipeline()
+{
+    controller_->destruction.set_value();
+}
+
+void AdaptiveTestPipeline::start(adaptive_engine::ExecutionContext& /*ctx*/)
+{
+    std::this_thread::sleep_for(controller_->startDuration.load());
+    controller_->start.set_value();
+    if (controller_->failOnStart)
+    {
+        throw Exception("I should throw here.", 9999);
+    }
+}
+
+void AdaptiveTestPipeline::execute(adaptive_engine::ExecutionContext& ctx, adaptive_engine::BufferHandle input)
+{
+    if (controller_->invocations.fetch_add(1) + 1 == controller_->throwOnNthInvocation)
+    {
+        throw Exception("I should throw here.", 9999);
+    }
+
+    // Handle repeat functionality using watermark as repeat counter
+    const size_t maxRepeats = controller_->repeatCount.load();
+    if (maxRepeats > 0)
+    {
+        auto* bufferProvider = ctx.get_buffer_provider();
+        const auto& metadata = bufferProvider->get_metadata(input);
+        const uint64_t currentRepeatCount = metadata.watermark;
+        if (currentRepeatCount < maxRepeats)
+        {
+            // For repeats, we need to request re-execution
+            ctx.repeat_task();
+            return;
+        }
+    }
+
+    // Emit buffer to downstream
+    ctx.emit_buffer(input);
+}
+
+void AdaptiveTestPipeline::stop(adaptive_engine::ExecutionContext& ctx)
+{
+    std::this_thread::sleep_for(controller_->stopDuration.load());
+    if (controller_->failOnStop)
+    {
+        throw Exception("I should throw here.", 9999);
+    }
+
+    auto stopCalls = stopCalled_.fetch_add(1);
+    auto repeatsDuringStop = controller_->repeatCountDuringStop.load();
+    if (stopCalls == repeatsDuringStop)
+    {
+        controller_->stop.set_value();
+    }
+    else if (stopCalls > repeatsDuringStop)
+    {
+        controller_->stop.set_exception(std::make_exception_ptr(TestException("Pipeline was terminated too often")));
+    }
+    else
+    {
+        ctx.repeat_task();
+    }
+}
+
+// ============================================================================
+// AdaptiveTestSink implementation
+// ============================================================================
+
+AdaptiveTestSink::AdaptiveTestSink(std::shared_ptr<TestBufferProvider> bufferProvider, std::shared_ptr<TestSinkController> controller, std::string stageId)
+    : bufferProvider_(std::move(bufferProvider)), controller_(std::move(controller)), stageId_(std::move(stageId))
+{
+}
+
+AdaptiveTestSink::~AdaptiveTestSink()
+{
+    controller_->destruction.set_value();
+}
+
+void AdaptiveTestSink::start(adaptive_engine::ExecutionContext& /*ctx*/)
+{
+    controller_->start.set_value();
+}
+
+void AdaptiveTestSink::execute(adaptive_engine::ExecutionContext& ctx, adaptive_engine::BufferHandle input)
+{
+    // Extract TupleBuffer from the handle and store it
+    auto* wrapper = static_cast<TestBufferWrapper*>(input.opaque);
+    if (wrapper != nullptr)
+    {
+        controller_->insertBuffer(Testing::copyBuffer(wrapper->buffer, *bufferProvider_->nesProvider_));
+    }
+
+    // Handle repeat functionality
+    const size_t maxRepeats = controller_->repeatCount.load();
+    if (maxRepeats > 0 && wrapper != nullptr)
+    {
+        const uint64_t currentRepeatCount = wrapper->metadata.watermark;
+        if (currentRepeatCount < maxRepeats)
+        {
+            ctx.repeat_task();
+        }
+    }
+}
+
+void AdaptiveTestSink::stop(adaptive_engine::ExecutionContext& ctx)
+{
+    auto stopCalls = stopCalled_.fetch_add(1);
+    auto repeatsDuringStop = controller_->repeatCountDuringStop.load();
+    if (stopCalls == repeatsDuringStop)
+    {
+        controller_->stop.set_value();
+    }
+    else if (stopCalls > repeatsDuringStop)
+    {
+        controller_->stop.set_exception(std::make_exception_ptr(TestException("Sink was terminated too often")));
+    }
+    else
+    {
+        ctx.repeat_task();
+    }
+}
+
+// ============================================================================
+// AdaptiveTestSourceHandle implementation
+// ============================================================================
+
+AdaptiveTestSourceHandle::AdaptiveTestSourceHandle(
+    std::unique_ptr<TestSource> source,
+    OriginId sourceId,
+    std::shared_ptr<TestBufferProvider> bufferProvider)
+    : source_(std::move(source)), sourceId_(sourceId), bufferProvider_(std::move(bufferProvider))
+{
+}
+
+std::optional<adaptive_engine::BufferHandle> AdaptiveTestSourceHandle::next_buffer(adaptive_engine::ExecutionContext& /*ctx*/)
+{
+    if (!opened_)
+    {
+        return std::nullopt;
+    }
+
+    // Allocate a buffer for the source to fill
+    auto handle = bufferProvider_->allocate(bufferProvider_->nesProvider_->getBufferSize());
+    if (handle.opaque == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    auto* wrapper = static_cast<TestBufferWrapper*>(handle.opaque);
+    auto result = source_->fillTupleBuffer(wrapper->buffer, stopSource_.get_token());
+
+    switch (result)
+    {
+        case Source::FillTupleBufferResult::Success:
+        {
+            // Update metadata from filled buffer
+            wrapper->metadata.sequence_number = sequenceNumber_.fetch_add(1);
+            wrapper->metadata.origin_id = sourceId_.getRawValue();
+            wrapper->metadata.watermark = wrapper->buffer.getWatermark().getRawValue();
+            wrapper->metadata.num_tuples = wrapper->buffer.getNumberOfTuples();
+            wrapper->metadata.chunk_number = static_cast<uint32_t>(wrapper->buffer.getChunkNumber().getRawValue());
+            wrapper->metadata.last_chunk = wrapper->buffer.isLastChunk();
+            return handle;
+        }
+        case Source::FillTupleBufferResult::EndOfStream:
+        case Source::FillTupleBufferResult::FailedShutdown:
+            bufferProvider_->release(handle);
+            return std::nullopt;
+    }
+    std::unreachable();
+}
+
+void AdaptiveTestSourceHandle::open(adaptive_engine::ExecutionContext& /*ctx*/)
+{
+    source_->open(bufferProvider_->nesProvider_);
+    opened_ = true;
+}
+
+void AdaptiveTestSourceHandle::close(adaptive_engine::ExecutionContext& /*ctx*/)
+{
+    stopSource_.request_stop();
+    source_->close();
+    opened_ = false;
+}
+
+std::string AdaptiveTestSourceHandle::get_id() const
+{
+    return fmt::format("TestSource-{}", sourceId_.getRawValue());
+}
+
+void AdaptiveTestSourceHandle::request_stop()
+{
+    stopSource_.request_stop();
 }
 
 std::tuple<std::shared_ptr<ExecutablePipeline>, std::shared_ptr<TestSinkController>>

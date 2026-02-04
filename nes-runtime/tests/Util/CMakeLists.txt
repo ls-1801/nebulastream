@@ -12,4 +12,4 @@
 
 add_library(nes-runtime-test-utils-lib QueryEngineTestingInfrastructure.cpp)
 target_include_directories(nes-runtime-test-utils-lib PUBLIC .)
-target_link_libraries(nes-runtime-test-utils-lib PUBLIC nes-common nes-runtime nes-executable GTest::gmock PRIVATE nes-memory-test-utils nes-sources-test-utils)
+target_link_libraries(nes-runtime-test-utils-lib PUBLIC nes-common nes-runtime nes-executable adaptive_engine_cpp GTest::gmock PRIVATE nes-memory-test-utils nes-sources-test-utils)

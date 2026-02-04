@@ -62,6 +62,10 @@
 #include <QueryEngine.hpp>
 #include <QueryEngineStatisticListener.hpp>
 #include <TestSource.hpp>
+#include <adaptive_engine/Buffer.hpp>
+#include <adaptive_engine/ExecutionContext.hpp>
+#include <adaptive_engine/PipelineStage.hpp>
+#include <adaptive_engine/SourceHandle.hpp>
 
 namespace NES::Testing
 {
@@ -76,6 +80,40 @@ constexpr std::chrono::milliseconds DEFAULT_LONG_AWAIT_TIMEOUT = std::chrono::mi
 /// Creates raw TupleBuffer data based on a recognizable pattern which can later be identified using `verifyIdentifier`.
 std::vector<std::byte> identifiableData(size_t identifier);
 bool verifyIdentifier(const TupleBuffer& buffer, size_t identifier);
+
+/// Internal wrapper that holds a TupleBuffer and its cached metadata for test infrastructure.
+/// This is stored as the opaque pointer in BufferHandle.
+struct TestBufferWrapper
+{
+    TupleBuffer buffer;
+    adaptive_engine::BufferMetadata metadata;
+
+    explicit TestBufferWrapper(TupleBuffer buf);
+};
+
+/// BufferProvider implementation for test infrastructure.
+/// Wraps NES AbstractBufferProvider for use with adaptive_engine interfaces.
+class TestBufferProvider final : public adaptive_engine::BufferProvider
+{
+public:
+    explicit TestBufferProvider(std::shared_ptr<AbstractBufferProvider> nesProvider);
+    ~TestBufferProvider() override = default;
+
+    adaptive_engine::BufferHandle wrap(void* data, size_t size, const adaptive_engine::BufferMetadata& metadata) override;
+    void release(adaptive_engine::BufferHandle handle) override;
+    void* get_data(adaptive_engine::BufferHandle handle) override;
+    size_t get_size(adaptive_engine::BufferHandle handle) override;
+    const adaptive_engine::BufferMetadata& get_metadata(adaptive_engine::BufferHandle handle) override;
+    adaptive_engine::BufferHandle allocate(size_t size) override;
+
+    /// Get the underlying NES buffer provider (for test infrastructure use)
+    std::shared_ptr<AbstractBufferProvider> getNesProvider() const { return nesProvider_; }
+
+private:
+    std::shared_ptr<AbstractBufferProvider> nesProvider_;
+    friend class AdaptiveTestSink;
+    friend class AdaptiveTestSourceHandle;
+};
 
 /// Mock Implementation of the StatisticListener. This can be used to verify that certain
 /// statistic events have been emitted during test execution.
@@ -324,6 +362,25 @@ protected:
     std::ostream& toString(std::ostream& os) const override;
 };
 
+/// AdaptiveTestPipeline implements adaptive_engine::PipelineStage for the new execution path.
+/// Uses the same TestPipelineController for test control and verification.
+class AdaptiveTestPipeline final : public adaptive_engine::PipelineStage
+{
+public:
+    explicit AdaptiveTestPipeline(std::shared_ptr<TestPipelineController> controller, std::string stageId);
+    ~AdaptiveTestPipeline() override;
+
+    void start(adaptive_engine::ExecutionContext& ctx) override;
+    void execute(adaptive_engine::ExecutionContext& ctx, adaptive_engine::BufferHandle input) override;
+    void stop(adaptive_engine::ExecutionContext& ctx) override;
+    std::string get_id() const override { return stageId_; }
+
+private:
+    std::shared_ptr<TestPipelineController> controller_;
+    std::string stageId_;
+    std::atomic_size_t stopCalled_{0};
+};
+
 struct TestSinkController
 {
     explicit TestSinkController(BackpressureController backpressureController) : backpressureController(std::move(backpressureController))
@@ -434,6 +491,49 @@ protected:
 private:
     std::shared_ptr<AbstractBufferProvider> bufferProvider;
     std::shared_ptr<TestSinkController> controller;
+};
+
+/// AdaptiveTestSink implements adaptive_engine::PipelineStage for the new execution path.
+/// Uses the same TestSinkController for test control and verification.
+class AdaptiveTestSink final : public adaptive_engine::PipelineStage
+{
+public:
+    AdaptiveTestSink(std::shared_ptr<TestBufferProvider> bufferProvider, std::shared_ptr<TestSinkController> controller, std::string stageId);
+    ~AdaptiveTestSink() override;
+
+    void start(adaptive_engine::ExecutionContext& ctx) override;
+    void execute(adaptive_engine::ExecutionContext& ctx, adaptive_engine::BufferHandle input) override;
+    void stop(adaptive_engine::ExecutionContext& ctx) override;
+    std::string get_id() const override { return stageId_; }
+
+private:
+    std::shared_ptr<TestBufferProvider> bufferProvider_;
+    std::shared_ptr<TestSinkController> controller_;
+    std::string stageId_;
+    std::atomic_size_t stopCalled_{0};
+};
+
+/// AdaptiveTestSourceHandle implements adaptive_engine::SourceHandle wrapping TestSource.
+class AdaptiveTestSourceHandle final : public adaptive_engine::SourceHandle
+{
+public:
+    AdaptiveTestSourceHandle(std::unique_ptr<TestSource> source, OriginId sourceId, std::shared_ptr<TestBufferProvider> bufferProvider);
+    ~AdaptiveTestSourceHandle() override = default;
+
+    std::optional<adaptive_engine::BufferHandle> next_buffer(adaptive_engine::ExecutionContext& ctx) override;
+    void open(adaptive_engine::ExecutionContext& ctx) override;
+    void close(adaptive_engine::ExecutionContext& ctx) override;
+    std::string get_id() const override;
+
+    void request_stop();
+
+private:
+    std::unique_ptr<TestSource> source_;
+    OriginId sourceId_;
+    std::shared_ptr<TestBufferProvider> bufferProvider_;
+    std::stop_source stopSource_;
+    std::atomic<uint64_t> sequenceNumber_{0};
+    bool opened_{false};
 };
 
 std::tuple<std::shared_ptr<ExecutablePipeline>, std::shared_ptr<TestSinkController>>
