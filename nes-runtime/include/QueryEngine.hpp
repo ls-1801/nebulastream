@@ -82,18 +82,6 @@ public:
     void stop(LocalQueryId queryId);
 
 private:
-    /// Start a query using the legacy ExecutablePipeline path
-    void startLegacy(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPlan> plan);
-
-    /// Start a query using the adaptive_engine path
-    void startAdaptive(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPlan> plan);
-
-    /// Stop a query using the legacy path
-    void stopLegacy(LocalQueryId queryId);
-
-    /// Process a source termination event (EoS or error)
-    void handleSourceTermination(LocalQueryId queryId, OriginId sourceId, QueryTerminationType type);
-
     /// Internal representation of a running query
     struct RunningQuery
     {
@@ -102,7 +90,20 @@ private:
         bool isLegacy{false};
         size_t sourcesFinished{0};
         size_t totalSources{0};
+        bool hasFailure{false};  // Track if any source failed
     };
+
+    /// Start a query using the legacy ExecutablePipeline path
+    void startLegacy(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPlan> plan);
+
+    /// Start a query using the adaptive_engine path
+    void startAdaptive(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPlan> plan);
+
+    /// Stop a query using the legacy path
+    void stopLegacy(LocalQueryId queryId, RunningQuery query);
+
+    /// Process a source termination event (EoS or error)
+    void handleSourceTermination(LocalQueryId queryId, OriginId sourceId, QueryTerminationType type);
 
     /// Configuration for the engine
     QueryEngineConfiguration config_;

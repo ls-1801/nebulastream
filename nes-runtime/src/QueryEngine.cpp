@@ -42,6 +42,9 @@ namespace NES
 
 namespace
 {
+/// Counter for generating unique task IDs across all pipelines
+static std::atomic<uint64_t> globalTaskIdCounter{0};
+
 /// Simple PipelineExecutionContext that routes buffers to successor pipelines.
 /// This is a minimal implementation for the legacy execution path.
 class LegacyPipelineExecutionContext : public PipelineExecutionContext
@@ -50,12 +53,16 @@ public:
     LegacyPipelineExecutionContext(
         PipelineId pipelineId,
         WorkerThreadId workerId,
+        LocalQueryId queryId,
         std::shared_ptr<BufferManager> bufferManager,
-        std::vector<std::weak_ptr<ExecutablePipeline>> successors)
+        std::vector<std::weak_ptr<ExecutablePipeline>> successors,
+        StatisticListener* statisticsListener)
         : pipelineId_(pipelineId)
         , workerId_(workerId)
+        , queryId_(queryId)
         , bufferManager_(std::move(bufferManager))
         , successors_(std::move(successors))
+        , statisticsListener_(statisticsListener)
     {
     }
 
@@ -66,12 +73,37 @@ public:
         {
             if (auto successor = weakSuccessor.lock())
             {
+                // Generate a unique task ID for this execution
+                const TaskId taskId = TaskId(globalTaskIdCounter.fetch_add(1));
+                const uint64_t numberOfTuples = buffer.getNumberOfTuples();
+
+                // Emit task emit event first (current pipeline -> successor)
+                if (statisticsListener_)
+                {
+                    static_cast<QueryEngineStatisticListener*>(statisticsListener_)
+                        ->onEvent(TaskEmit(workerId_, queryId_, pipelineId_, successor->id, taskId, numberOfTuples));
+                }
+
+                // Emit task execution start event for the successor pipeline
+                if (statisticsListener_)
+                {
+                    static_cast<QueryEngineStatisticListener*>(statisticsListener_)
+                        ->onEvent(TaskExecutionStart(workerId_, queryId_, successor->id, taskId, numberOfTuples));
+                }
+
                 // Create a context for the successor pipeline
                 LegacyPipelineExecutionContext successorContext(
-                    successor->id, workerId_, bufferManager_, successor->successors);
+                    successor->id, workerId_, queryId_, bufferManager_, successor->successors, statisticsListener_);
 
                 // Execute the successor with the buffer
                 successor->stage->execute(buffer, successorContext);
+
+                // Emit task execution complete event for the successor pipeline
+                if (statisticsListener_)
+                {
+                    static_cast<QueryEngineStatisticListener*>(statisticsListener_)
+                        ->onEvent(TaskExecutionComplete(workerId_, queryId_, successor->id, taskId));
+                }
             }
         }
         return true;
@@ -110,8 +142,10 @@ public:
 private:
     PipelineId pipelineId_;
     WorkerThreadId workerId_;
+    LocalQueryId queryId_;
     std::shared_ptr<BufferManager> bufferManager_;
     std::vector<std::weak_ptr<ExecutablePipeline>> successors_;
+    StatisticListener* statisticsListener_;
     std::unordered_map<OperatorHandlerId, std::shared_ptr<OperatorHandler>> operatorHandlers_;
 };
 }  // namespace
@@ -161,7 +195,7 @@ QueryEngine::~QueryEngine()
             {
                 if (*it && (*it)->stage)
                 {
-                    LegacyPipelineExecutionContext ctx((*it)->id, workerThreadId_, bufferManager_, (*it)->successors);
+                    LegacyPipelineExecutionContext ctx((*it)->id, workerThreadId_, queryId, bufferManager_, (*it)->successors, statisticsListener_.get());
                     (*it)->stage->stop(ctx);
                 }
             }
@@ -221,7 +255,7 @@ void QueryEngine::startLegacy(LocalQueryId queryId, std::unique_ptr<ExecutableQu
     {
         if (pipeline && pipeline->stage)
         {
-            LegacyPipelineExecutionContext ctx(pipeline->id, workerThreadId_, bufferManager_, pipeline->successors);
+            LegacyPipelineExecutionContext ctx(pipeline->id, workerThreadId_, queryId, bufferManager_, pipeline->successors, statisticsListener_.get());
             pipeline->stage->start(ctx);
 
             // Emit pipeline start event
@@ -252,9 +286,6 @@ void QueryEngine::startLegacy(LocalQueryId queryId, std::unique_ptr<ExecutableQu
     auto queries = runningQueries_.wlock();
     auto& query = queries->at(queryId);
 
-    // Task ID counter for statistics (simple incrementing counter per query)
-    static std::atomic<uint64_t> taskIdCounter{0};
-
     for (auto& [source, successors] : query.plan->sources)
     {
         const OriginId sourceId = source->getSourceId();
@@ -269,42 +300,36 @@ void QueryEngine::startLegacy(LocalQueryId queryId, std::unique_ptr<ExecutableQu
                 Overloaded{
                     [&](const SourceReturnType::Data& data) -> SourceReturnType::EmitResult
                     {
-                        const TaskId taskId = TaskId(taskIdCounter.fetch_add(1));
                         const uint64_t numberOfTuples = data.buffer.getNumberOfTuples();
-                        // Use pipeline ID 0 for source-level task execution
-                        const PipelineId sourcePipelineId = PipelineId(0);
-
-                        // Emit task execution start event
-                        if (statisticsListener_)
-                        {
-                            static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())
-                                ->onEvent(TaskExecutionStart(workerId, queryId, sourcePipelineId, taskId, numberOfTuples));
-                        }
 
                         // Route buffer to all successor pipelines
+                        // Sources don't emit TaskExecutionStart/Complete - only pipeline stages do
                         for (const auto& weakSuccessor : successors)
                         {
                             if (auto successor = weakSuccessor.lock())
                             {
-                                LegacyPipelineExecutionContext ctx(
-                                    successor->id, workerId, bufferManager_, successor->successors);
+                                // Generate a unique task ID for this pipeline execution
+                                const TaskId taskId = TaskId(globalTaskIdCounter.fetch_add(1));
 
-                                // Emit task emit event before execution
+                                // Emit task execution start event for the successor pipeline
                                 if (statisticsListener_)
                                 {
                                     static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())
-                                        ->onEvent(TaskEmit(workerId, queryId, sourcePipelineId, successor->id, taskId, numberOfTuples));
+                                        ->onEvent(TaskExecutionStart(workerId, queryId, successor->id, taskId, numberOfTuples));
                                 }
 
-                                successor->stage->execute(data.buffer, ctx);
-                            }
-                        }
+                                LegacyPipelineExecutionContext ctx(
+                                    successor->id, workerId, queryId, bufferManager_, successor->successors, statisticsListener_.get());
 
-                        // Emit task execution complete event
-                        if (statisticsListener_)
-                        {
-                            static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())
-                                ->onEvent(TaskExecutionComplete(workerId, queryId, sourcePipelineId, taskId));
+                                successor->stage->execute(data.buffer, ctx);
+
+                                // Emit task execution complete event for the successor pipeline
+                                if (statisticsListener_)
+                                {
+                                    static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())
+                                        ->onEvent(TaskExecutionComplete(workerId, queryId, successor->id, taskId));
+                                }
+                            }
                         }
 
                         return SourceReturnType::EmitResult::SUCCESS;
@@ -391,6 +416,7 @@ void QueryEngine::handleSourceTermination(LocalQueryId queryId, OriginId sourceI
     }
 
     bool allSourcesFinished = false;
+    bool hadFailure = false;
     std::unique_ptr<ExecutableQueryPlan> planToCleanup;
 
     {
@@ -402,11 +428,18 @@ void QueryEngine::handleSourceTermination(LocalQueryId queryId, OriginId sourceI
             return;
         }
 
+        // Track if any source failed
+        if (type == QueryTerminationType::Failure)
+        {
+            it->second.hasFailure = true;
+        }
+
         it->second.sourcesFinished++;
         allSourcesFinished = (it->second.sourcesFinished >= it->second.totalSources);
 
         if (allSourcesFinished)
         {
+            hadFailure = it->second.hasFailure;
             planToCleanup = std::move(it->second.plan);
             queries->erase(it);
         }
@@ -414,20 +447,20 @@ void QueryEngine::handleSourceTermination(LocalQueryId queryId, OriginId sourceI
 
     if (allSourcesFinished && planToCleanup)
     {
-        NES_INFO("All sources finished for query {}, stopping pipelines", queryId);
+        NES_INFO("All sources finished for query {}, stopping pipelines (failure={})", queryId, hadFailure);
 
         // Run cleanup in a separate thread to avoid deadlock.
         // This is called from within the source thread's emit callback, and stopping
         // pipelines/sources could try to join the source thread, causing a deadlock.
         std::thread cleanupThread(
-            [this, queryId, plan = std::move(planToCleanup)]() mutable
+            [this, queryId, hadFailure, plan = std::move(planToCleanup)]() mutable
             {
                 // Stop pipelines in reverse order (sinks first)
                 for (auto it = plan->pipelines.rbegin(); it != plan->pipelines.rend(); ++it)
                 {
                     if (*it && (*it)->stage)
                     {
-                        LegacyPipelineExecutionContext ctx((*it)->id, workerThreadId_, bufferManager_, (*it)->successors);
+                        LegacyPipelineExecutionContext ctx((*it)->id, workerThreadId_, queryId, bufferManager_, (*it)->successors, statisticsListener_.get());
                         (*it)->stage->stop(ctx);
 
                         // Emit pipeline stop event
@@ -439,16 +472,23 @@ void QueryEngine::handleSourceTermination(LocalQueryId queryId, OriginId sourceI
                     }
                 }
 
-                // Emit query stop event
+                // Emit query stop event (QueryStop is emitted for both graceful and failure cases)
                 if (statisticsListener_)
                 {
                     static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())->onEvent(QueryStop(workerThreadId_, queryId));
                 }
 
-                // Log the query stop
+                // Log the query status: use logQueryFailure if any source failed, logQueryStatusChange otherwise
                 if (queryLog_)
                 {
-                    queryLog_->logQueryStatusChange(queryId, QueryState::Stopped, std::chrono::system_clock::now());
+                    if (hadFailure)
+                    {
+                        queryLog_->logQueryFailure(queryId, Exception("Source failure caused query termination", 0), std::chrono::system_clock::now());
+                    }
+                    else
+                    {
+                        queryLog_->logQueryStatusChange(queryId, QueryState::Stopped, std::chrono::system_clock::now());
+                    }
                 }
 
                 // Plan is destroyed when lambda exits, cleaning up all resources
@@ -492,7 +532,7 @@ void QueryEngine::stop(LocalQueryId queryId)
 
     if (query->isLegacy)
     {
-        stopLegacy(queryId);
+        stopLegacy(queryId, std::move(*query));
         return;
     }
 
@@ -521,12 +561,35 @@ void QueryEngine::stop(LocalQueryId queryId)
     }
 }
 
-void QueryEngine::stopLegacy(LocalQueryId queryId)
+void QueryEngine::stopLegacy(LocalQueryId queryId, RunningQuery query)
 {
     NES_INFO("Stopping legacy query {}", queryId);
 
-    // Query was already removed from map in stop()
-    // The sources should have been stopped already or will stop on their own
+    // Stop all sources first
+    if (query.plan)
+    {
+        for (auto& [source, successors] : query.plan->sources)
+        {
+            source->stop();
+        }
+
+        // Stop pipelines in reverse order (sinks first)
+        for (auto it = query.plan->pipelines.rbegin(); it != query.plan->pipelines.rend(); ++it)
+        {
+            if (*it && (*it)->stage)
+            {
+                LegacyPipelineExecutionContext ctx((*it)->id, workerThreadId_, queryId, bufferManager_, (*it)->successors, statisticsListener_.get());
+                (*it)->stage->stop(ctx);
+
+                // Emit pipeline stop event
+                if (statisticsListener_)
+                {
+                    static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())
+                        ->onEvent(PipelineStop(workerThreadId_, queryId, (*it)->id));
+                }
+            }
+        }
+    }
 
     // Log the query stop
     if (queryLog_)
