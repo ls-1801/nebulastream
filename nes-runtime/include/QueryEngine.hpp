@@ -21,7 +21,6 @@
 #include <vector>
 #include <Identifiers/Identifiers.hpp>
 #include <QueryEngineConfiguration.hpp>
-#include <Runtime/QueryTerminationType.hpp>
 #include <adaptive_engine/Engine.hpp>
 #include <folly/Synchronized.h>
 
@@ -29,7 +28,6 @@ namespace NES
 {
 
 struct ExecutableQueryPlan;
-struct ExecutablePipeline;
 class BufferManager;
 struct QueryLog;
 class NesBufferProvider;
@@ -83,23 +81,10 @@ private:
     {
         adaptive_engine::QueryId engineQueryId{0};
         std::unique_ptr<ExecutableQueryPlan> plan;
-        bool isLegacy{false};
-        size_t sourcesFinished{0};
-        size_t totalSources{0};
-        bool hasFailure{false};  // Track if any source failed
     };
-
-    /// Start a query using the legacy ExecutablePipeline path
-    void startLegacy(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPlan> plan);
 
     /// Start a query using the adaptive_engine path
     void startAdaptive(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPlan> plan);
-
-    /// Stop a query using the legacy path
-    void stopLegacy(LocalQueryId queryId, RunningQuery query);
-
-    /// Process a source termination event (EoS or error)
-    void handleSourceTermination(LocalQueryId queryId, OriginId sourceId, QueryTerminationType type);
 
     /// Configuration for the engine
     QueryEngineConfiguration config_;
@@ -110,7 +95,7 @@ private:
     /// Query log for status changes
     std::shared_ptr<QueryLog> queryLog_;
 
-    /// Buffer manager for allocations (kept for legacy path)
+    /// Buffer manager for allocations
     std::shared_ptr<BufferManager> bufferManager_;
 
     /// Buffer provider wrapping the NES buffer manager

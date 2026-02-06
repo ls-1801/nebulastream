@@ -87,22 +87,7 @@ QueryEngine::~QueryEngine()
 
 void QueryEngine::start(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPlan> plan)
 {
-    NES_INFO("Starting query {}", queryId);
-
-    // Check if this is a legacy query (no adaptive stages)
-    if (plan->getAdaptiveStages().empty())
-    {
-        startLegacy(queryId, std::move(plan));
-    }
-    else
-    {
-        startAdaptive(queryId, std::move(plan));
-    }
-}
-
-void QueryEngine::startLegacy(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPlan> /*plan*/)
-{
-    NES_ERROR("Legacy execution path has been removed. Query {} cannot be started.", queryId);
+    startAdaptive(queryId, std::move(plan));
 }
 
 void QueryEngine::startAdaptive(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPlan> plan)
@@ -128,7 +113,7 @@ void QueryEngine::startAdaptive(LocalQueryId queryId, std::unique_ptr<Executable
 
     // Store the mapping and the plan
     runningQueries_.wlock()->emplace(
-        queryId, RunningQuery{.engineQueryId = engineQueryId, .plan = std::move(plan), .isLegacy = false, .sourcesFinished = 0, .totalSources = 0});
+        queryId, RunningQuery{.engineQueryId = engineQueryId, .plan = std::move(plan)});
 
     // Log the query start
     if (queryLog_)
@@ -143,11 +128,6 @@ void QueryEngine::startAdaptive(LocalQueryId queryId, std::unique_ptr<Executable
     }
 
     NES_INFO("Query {} started with engine query ID {}", queryId, engineQueryId);
-}
-
-void QueryEngine::handleSourceTermination(LocalQueryId queryId, OriginId sourceId, QueryTerminationType /*type*/)
-{
-    NES_WARNING("handleSourceTermination called for query {} source {} but legacy path has been removed", queryId, sourceId);
 }
 
 void QueryEngine::stop(LocalQueryId queryId)
@@ -178,12 +158,6 @@ void QueryEngine::stop(LocalQueryId queryId)
         return;
     }
 
-    if (query->isLegacy)
-    {
-        stopLegacy(queryId, std::move(*query));
-        return;
-    }
-
     // Stop the query in the adaptive engine
     bool stopped = engine_->stop_query(query->engineQueryId);
 
@@ -207,11 +181,6 @@ void QueryEngine::stop(LocalQueryId queryId)
     {
         static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())->onEvent(QueryStop(workerThreadId_, queryId));
     }
-}
-
-void QueryEngine::stopLegacy(LocalQueryId queryId, RunningQuery /*query*/)
-{
-    NES_ERROR("Legacy execution path has been removed. Query {} cannot be stopped via legacy path.", queryId);
 }
 
 }  // namespace NES
