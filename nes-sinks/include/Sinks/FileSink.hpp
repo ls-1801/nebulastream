@@ -30,7 +30,6 @@
 #include <Sinks/SinkDescriptor.hpp>
 #include <SinksParsing/CSVFormat.hpp>
 #include <SinksParsing/Format.hpp>
-#include <PipelineExecutionContext.hpp>
 
 namespace NES
 {
@@ -38,9 +37,6 @@ namespace NES
 class FileSink final : public Sink
 {
 public:
-    /// Bring NesPipelineStage::execute into scope (prevents -Woverloaded-virtual from dual inheritance)
-    using NesPipelineStage::execute;
-
     static constexpr std::string_view NAME = "File";
     explicit FileSink(BackpressureController backpressureController, const SinkDescriptor& sinkDescriptor);
     ~FileSink() override = default;
@@ -54,11 +50,6 @@ public:
     void start(adaptive_engine::ExecutionContext& ctx) override;
     void stop(adaptive_engine::ExecutionContext& ctx) override;
     [[nodiscard]] std::string get_id() const override;
-
-    /// --- Legacy ExecutablePipelineStage interface (to be removed in US-029+) ---
-    void start(PipelineExecutionContext& pipelineExecutionContext) override;
-    void execute(const TupleBuffer& inputTupleBuffer, PipelineExecutionContext& pipelineExecutionContext) override;
-    void stop(PipelineExecutionContext& pipelineExecutionContext) override;
 
     static DescriptorConfig::Config validateAndFormat(std::unordered_map<std::string, std::string> config);
 

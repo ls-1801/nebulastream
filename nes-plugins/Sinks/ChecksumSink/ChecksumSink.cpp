@@ -31,7 +31,6 @@
 #include <Util/Logger/Logger.hpp>
 #include <fmt/ostream.h>
 #include <ErrorHandling.hpp>
-#include <PipelineExecutionContext.hpp>
 #include <SinkRegistry.hpp>
 #include <SinkValidationRegistry.hpp>
 
@@ -45,53 +44,6 @@ ChecksumSink::ChecksumSink(BackpressureController backpressureController, const 
     , formatter(std::make_unique<CSVFormat>(*sinkDescriptor.getSchema(), true))
 {
 }
-
-void ChecksumSink::start(PipelineExecutionContext&)
-{
-    NES_DEBUG("Setting up checksum sink: {}", *this);
-    if (std::filesystem::exists(outputFilePath.c_str()))
-    {
-        std::error_code ec;
-        if (!std::filesystem::remove(outputFilePath.c_str(), ec))
-        {
-            throw CannotOpenSink("Could not remove existing output file: filePath={} ", outputFilePath);
-        }
-    }
-
-    /// Open the file stream
-    if (!outputFileStream.is_open())
-    {
-        outputFileStream.open(outputFilePath, std::ofstream::binary | std::ofstream::app);
-    }
-    isOpen = outputFileStream.is_open() && outputFileStream.good();
-    if (!isOpen)
-    {
-        throw CannotOpenSink(
-            "Could not open output file; filePathOutput={}, is_open()={}, good={}",
-            outputFilePath,
-            outputFileStream.is_open(),
-            outputFileStream.good());
-    }
-}
-
-void ChecksumSink::stop(PipelineExecutionContext&)
-{
-    NES_INFO("Checksum Sink completed. Checksum: {}", fmt::streamed(checksum));
-
-    outputFileStream << "S$Count:UINT64,S$Checksum:UINT64" << '\n';
-    outputFileStream << checksum.numberOfTuples << "," << checksum.checksum << '\n';
-    outputFileStream.close();
-    isOpen = false;
-}
-
-void ChecksumSink::execute(const TupleBuffer& inputBuffer, PipelineExecutionContext&)
-{
-    PRECONDITION(inputBuffer, "Invalid input buffer in ChecksumSink.");
-    const std::string formatted = formatter->getFormattedBuffer(inputBuffer);
-    checksum.add(formatted);
-}
-
-/// --- adaptive_engine::PipelineStage interface (via NesPipelineStage) ---
 
 void ChecksumSink::start(adaptive_engine::ExecutionContext& /*ctx*/)
 {

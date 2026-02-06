@@ -31,7 +31,6 @@
 #include <SinksParsing/CSVFormat.hpp>
 #include <SinksParsing/Format.hpp>
 #include <BackpressureChannel.hpp>
-#include <PipelineExecutionContext.hpp>
 
 namespace NES
 {
@@ -39,11 +38,6 @@ namespace NES
 class PrintSink final : public Sink
 {
 public:
-    /// Bring NesPipelineStage overloads into scope (prevents -Woverloaded-virtual from dual inheritance)
-    using NesPipelineStage::start;
-    using NesPipelineStage::execute;
-    using NesPipelineStage::stop;
-
     static constexpr std::string_view NAME = "Print";
 
     explicit PrintSink(BackpressureController backpressureController, const SinkDescriptor& sinkDescriptor);
@@ -56,11 +50,6 @@ public:
 
     /// --- adaptive_engine::PipelineStage interface (via NesPipelineStage) ---
     [[nodiscard]] std::string get_id() const override;
-
-    /// --- Legacy ExecutablePipelineStage interface (to be removed in US-029+) ---
-    void start(PipelineExecutionContext& pipelineExecutionContext) override;
-    void execute(const TupleBuffer& inputTupleBuffer, PipelineExecutionContext& pipelineExecutionContext) override;
-    void stop(PipelineExecutionContext& pipelineExecutionContext) override;
 
     static DescriptorConfig::Config validateAndFormat(std::unordered_map<std::string, std::string> config);
 

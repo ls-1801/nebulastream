@@ -19,14 +19,12 @@
 #include <fmt/ostream.h>
 #include <Execution/NesPipelineStage.hpp>
 #include <BackpressureChannel.hpp>
-#include <ExecutablePipelineStage.hpp>
 
 namespace NES
 {
 
-/// Base class for all NES sinks. Inherits from both NesPipelineStage (new adaptive engine interface)
-/// and ExecutablePipelineStage (legacy interface, to be removed in US-029+).
-class Sink : public NesPipelineStage, public ExecutablePipelineStage
+/// Base class for all NES sinks. Inherits from NesPipelineStage (adaptive engine interface).
+class Sink : public NesPipelineStage
 {
 public:
     explicit Sink(BackpressureController backpressureController) : backpressureController(std::move(backpressureController)) { }

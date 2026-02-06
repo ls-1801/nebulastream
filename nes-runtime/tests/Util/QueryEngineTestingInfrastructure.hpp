@@ -54,7 +54,6 @@
 #include <gtest/gtest-assertion-result.h>
 #include <gtest/gtest.h>
 #include <ErrorHandling.hpp>
-#include <ExecutablePipelineStage.hpp>
 #include <ExecutableQueryPlan.hpp>
 #include <Listeners/StatisticListener.hpp>
 #include <Listeners/SystemEventListener.hpp>
@@ -66,6 +65,49 @@
 #include <adaptive_engine/ExecutionContext.hpp>
 #include <adaptive_engine/PipelineStage.hpp>
 #include <adaptive_engine/SourceHandle.hpp>
+
+namespace NES
+{
+/// Legacy interface for test pipeline stages that use PipelineExecutionContext.
+/// Previously in ExecutablePipelineStage.hpp, now local to test infrastructure (to be deleted with US-033).
+class ExecutablePipelineStage
+{
+public:
+    virtual ~ExecutablePipelineStage() = default;
+    virtual void start(PipelineExecutionContext& pipelineExecutionContext) = 0;
+    virtual void execute(const TupleBuffer& inputTupleBuffer, PipelineExecutionContext& pipelineExecutionContext) = 0;
+    virtual void stop(PipelineExecutionContext& pipelineExecutionContext) = 0;
+
+    friend std::ostream& operator<<(std::ostream& os, const ExecutablePipelineStage& eps) { return eps.toString(os); }
+
+protected:
+    virtual std::ostream& toString(std::ostream& os) const = 0;
+};
+
+/// Legacy pipeline wrapper for test infrastructure (to be deleted with US-033).
+struct ExecutablePipeline
+{
+    PipelineId id;
+    std::unique_ptr<ExecutablePipelineStage> stage;
+    std::vector<std::weak_ptr<ExecutablePipeline>> successors;
+
+    ExecutablePipeline(
+        PipelineId id,
+        std::unique_ptr<ExecutablePipelineStage> stage,
+        std::vector<std::weak_ptr<ExecutablePipeline>> successors)
+        : id(id), stage(std::move(stage)), successors(std::move(successors))
+    {
+    }
+
+    static std::shared_ptr<ExecutablePipeline> create(
+        PipelineId id,
+        std::unique_ptr<ExecutablePipelineStage> stage,
+        std::vector<std::weak_ptr<ExecutablePipeline>> successors)
+    {
+        return std::make_shared<ExecutablePipeline>(id, std::move(stage), std::move(successors));
+    }
+};
+}
 
 namespace NES::Testing
 {

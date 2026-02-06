@@ -32,7 +32,6 @@
 #include <magic_enum/magic_enum.hpp>
 #include <BackpressureChannel.hpp>
 #include <ErrorHandling.hpp>
-#include <PipelineExecutionContext.hpp>
 #include <SinkRegistry.hpp>
 #include <SinkValidationRegistry.hpp>
 
@@ -55,23 +54,6 @@ PrintSink::PrintSink(BackpressureController backpressureController, const SinkDe
         default:
             throw UnknownSinkFormat(fmt::format("Sink format: {} not supported.", magic_enum::enum_name(inputFormat)));
     }
-}
-
-void PrintSink::start(PipelineExecutionContext&)
-{
-}
-
-void PrintSink::stop(PipelineExecutionContext&)
-{
-}
-
-void PrintSink::execute(const TupleBuffer& inputBuffer, PipelineExecutionContext&)
-{
-    PRECONDITION(inputBuffer, "Invalid input buffer in PrintSink.");
-
-    const auto bufferAsString = outputParser->getFormattedBuffer(inputBuffer);
-    *(*outputStream.wlock()) << bufferAsString << '\n';
-    std::this_thread::sleep_for(std::chrono::milliseconds{ingestion});
 }
 
 void PrintSink::doExecute(adaptive_engine::ExecutionContext& /*ctx*/, TupleBuffer& inputBuffer)

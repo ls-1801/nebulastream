@@ -36,8 +36,18 @@
 #include <Util/Timer.hpp>
 #include <folly/MPMCQueue.h>
 #include <ErrorHandling.hpp>
-#include <ExecutablePipelineStage.hpp>
 #include <PipelineExecutionContext.hpp>
+
+/// Minimal abstract interface for test pipeline stages that use PipelineExecutionContext.
+/// Previously in ExecutablePipelineStage.hpp, now local to test infrastructure.
+class TestExecutablePipelineStage
+{
+public:
+    virtual ~TestExecutablePipelineStage() = default;
+    virtual void start(NES::PipelineExecutionContext& pipelineExecutionContext) = 0;
+    virtual void execute(const NES::TupleBuffer& inputTupleBuffer, NES::PipelineExecutionContext& pipelineExecutionContext) = 0;
+    virtual void stop(NES::PipelineExecutionContext& pipelineExecutionContext) = 0;
+};
 
 namespace NES
 {
@@ -123,9 +133,9 @@ private:
     std::shared_ptr<std::vector<std::vector<TupleBuffer>>> resultBuffers;
 };
 
-/// Represents a single ExecutablePipelineStage with multiple functions ('taskSteps').
+/// Represents a single test pipeline stage with multiple functions ('taskSteps').
 /// Executes all 'taskSteps' in its 'execute' function.
-class TestPipelineStage final : public ExecutablePipelineStage
+class TestPipelineStage final : public TestExecutablePipelineStage
 {
 public:
     using ExecuteFunction = std::function<void(const TupleBuffer&, PipelineExecutionContext&)>;
@@ -151,24 +161,36 @@ private:
 /// Maps a pipeline task to a specific worker thread and therefore allows a test task queue to execute a specific task on a specific worker.
 struct TestPipelineTask
 {
+    using ExecuteFn = std::function<void(const TupleBuffer&, PipelineExecutionContext&)>;
+
     TestPipelineTask() : workerThreadId(INVALID<WorkerThreadId>) { };
 
-    TestPipelineTask(const WorkerThreadId workerThreadId, TupleBuffer tupleBuffer, std::shared_ptr<ExecutablePipelineStage> eps)
-        : workerThreadId(workerThreadId), tupleBuffer(std::move(tupleBuffer)), eps(std::move(eps))
+    TestPipelineTask(const WorkerThreadId workerThreadId, TupleBuffer tupleBuffer, std::shared_ptr<TestExecutablePipelineStage> eps)
+        : workerThreadId(workerThreadId), tupleBuffer(std::move(tupleBuffer)),
+          executeFn([e = std::move(eps)](const TupleBuffer& buf, PipelineExecutionContext& ctx) { e->execute(buf, ctx); })
     {
     }
 
-    TestPipelineTask(TupleBuffer tupleBuffer, std::shared_ptr<ExecutablePipelineStage> eps)
-        : workerThreadId(INVALID<WorkerThreadId>), tupleBuffer(std::move(tupleBuffer)), eps(std::move(eps))
+    TestPipelineTask(TupleBuffer tupleBuffer, std::shared_ptr<TestExecutablePipelineStage> eps)
+        : workerThreadId(INVALID<WorkerThreadId>), tupleBuffer(std::move(tupleBuffer)),
+          executeFn([e = std::move(eps)](const TupleBuffer& buf, PipelineExecutionContext& ctx) { e->execute(buf, ctx); })
+    {
+    }
+
+    /// Constructor accepting any type with execute(const TupleBuffer&, PipelineExecutionContext&) method
+    template <typename T>
+    TestPipelineTask(const WorkerThreadId workerThreadId, TupleBuffer tupleBuffer, std::shared_ptr<T> stage)
+        : workerThreadId(workerThreadId), tupleBuffer(std::move(tupleBuffer)),
+          executeFn([s = std::move(stage)](const TupleBuffer& buf, PipelineExecutionContext& ctx) { s->execute(buf, ctx); })
     {
     }
 
     /// Executes the TestablePipelineTask, passing the pipelineExecutionContext into its 'execute' function
-    void execute(TestPipelineExecutionContext& pec) const { eps->execute(tupleBuffer, pec); }
+    void execute(TestPipelineExecutionContext& pec) const { executeFn(tupleBuffer, pec); }
 
     WorkerThreadId workerThreadId;
     TupleBuffer tupleBuffer;
-    std::shared_ptr<ExecutablePipelineStage> eps;
+    ExecuteFn executeFn;
 };
 
 struct WorkTask
@@ -196,7 +218,7 @@ private:
     std::shared_ptr<AbstractBufferProvider> bufferProvider;
     std::shared_ptr<std::vector<std::vector<TupleBuffer>>> resultBuffers;
 
-    std::shared_ptr<ExecutablePipelineStage> eps;
+    std::shared_ptr<TestExecutablePipelineStage> eps;
 
     /// Sets up all tasks for the threads.
     void enqueueTasks(std::vector<TestPipelineTask> pipelineTasks);
@@ -227,7 +249,7 @@ private:
     std::latch completionLatch;
     std::shared_ptr<AbstractBufferProvider> bufferProvider;
     std::shared_ptr<std::vector<std::vector<TupleBuffer>>> resultBuffers;
-    std::shared_ptr<ExecutablePipelineStage> eps;
+    std::shared_ptr<TestExecutablePipelineStage> eps;
     std::vector<std::jthread> threads;
     Timer<std::chrono::microseconds> timer;
 

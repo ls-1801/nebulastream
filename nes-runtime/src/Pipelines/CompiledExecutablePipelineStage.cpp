@@ -247,7 +247,7 @@ std::string CompiledExecutablePipelineStage::get_id() const
     return stageId_;
 }
 
-// --- Legacy ExecutablePipelineStage interface implementations ---
+// Legacy PipelineExecutionContext-based interface (used by input formatter test infrastructure)
 
 void CompiledExecutablePipelineStage::start(PipelineExecutionContext& pipelineExecutionContext)
 {

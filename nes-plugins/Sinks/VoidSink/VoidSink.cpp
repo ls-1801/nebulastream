@@ -24,7 +24,6 @@
 #include <Sinks/SinkDescriptor.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <ErrorHandling.hpp>
-#include <PipelineExecutionContext.hpp>
 #include <SinkRegistry.hpp>
 #include <SinkValidationRegistry.hpp>
 
@@ -33,23 +32,6 @@ namespace NES
 VoidSink::VoidSink(BackpressureController backpressureController, const SinkDescriptor&) : Sink(std::move(backpressureController))
 {
 }
-
-void VoidSink::start(PipelineExecutionContext&)
-{
-    NES_DEBUG("Setting up void sink: {}", *this);
-}
-
-void VoidSink::stop(PipelineExecutionContext&)
-{
-    NES_INFO("Void Sink completed.")
-}
-
-void VoidSink::execute([[maybe_unused]] const TupleBuffer& inputTupleBuffer, PipelineExecutionContext&)
-{
-    PRECONDITION(inputTupleBuffer, "Invalid input buffer in VoidSink.");
-}
-
-/// --- adaptive_engine::PipelineStage interface (via NesPipelineStage) ---
 
 void VoidSink::doExecute(adaptive_engine::ExecutionContext& /*ctx*/, TupleBuffer& inputTupleBuffer)
 {

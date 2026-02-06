@@ -24,7 +24,6 @@
 #include <Sinks/Sink.hpp>
 #include <Sinks/SinkDescriptor.hpp>
 #include <Util/Logger/Formatter.hpp>
-#include <PipelineExecutionContext.hpp>
 
 namespace NES
 {
@@ -35,21 +34,12 @@ namespace NES
 class VoidSink final : public Sink
 {
 public:
-    /// Bring NesPipelineStage overloads into scope (prevents -Woverloaded-virtual from dual inheritance)
-    using NesPipelineStage::start;
-    using NesPipelineStage::execute;
-    using NesPipelineStage::stop;
-
     static constexpr std::string_view NAME = "Void";
     explicit VoidSink(BackpressureController backpressureController, const SinkDescriptor& sinkDescriptor);
 
     /// --- adaptive_engine::PipelineStage interface (via NesPipelineStage) ---
     [[nodiscard]] std::string get_id() const override;
 
-    /// --- Legacy ExecutablePipelineStage interface (to be removed in US-029+) ---
-    void start(PipelineExecutionContext&) override;
-    void stop(PipelineExecutionContext&) override;
-    void execute(const TupleBuffer& inputTupleBuffer, PipelineExecutionContext& pipelineExecutionContext) override;
     static DescriptorConfig::Config validateAndFormat(std::unordered_map<std::string, std::string> config);
 
 protected:

@@ -14,11 +14,8 @@
 
 #include <ExecutableQueryPlan.hpp>
 
-#include <cstddef>
-#include <functional>
 #include <memory>
 #include <ostream>
-#include <string>
 #include <utility>
 #include <vector>
 #include <Identifiers/Identifiers.hpp>
@@ -34,37 +31,15 @@ namespace NES
 
 std::ostream& operator<<(std::ostream& os, const ExecutableQueryPlan& instantiatedQueryPlan)
 {
-    std::function<void(const std::weak_ptr<ExecutablePipeline>&, size_t)> printNode
-        = [&os, &printNode](const std::weak_ptr<ExecutablePipeline>& weakPipeline, size_t indent)
-    {
-        auto pipeline = weakPipeline.lock();
-        if (pipeline && pipeline->stage)
-        {
-            os << std::string(indent * 4, ' ') << *pipeline->stage << "(" << pipeline->id << ")" << '\n';
-            for (const auto& successor : pipeline->successors)
-            {
-                printNode(successor, indent + 1);
-            }
-        }
-    };
-
-    for (const auto& [source, successors] : instantiatedQueryPlan.sources)
-    {
-        os << *source << '\n';
-        for (const auto& successor : successors)
-        {
-            printNode(successor, 1);
-        }
-    }
+    os << "ExecutableQueryPlan(id=" << instantiatedQueryPlan.localQueryId
+       << ", sources=" << instantiatedQueryPlan.sources.size()
+       << ", stages=" << instantiatedQueryPlan.getAdaptiveStages().size() << ")";
     return os;
 }
 
 std::unique_ptr<ExecutableQueryPlan>
 ExecutableQueryPlan::instantiate(CompiledQueryPlan& compiledQueryPlan, const SourceProvider& sourceProvider)
 {
-    std::vector<ExecutableQueryPlan::SourceWithSuccessor> instantiatedSources;
-    std::vector<std::shared_ptr<ExecutablePipeline>> pipelines;
-
     auto [backpressureController, backpressureListener] = createBackpressureChannel();
 
     if (compiledQueryPlan.pending_sinks.size() != 1)
@@ -87,20 +62,15 @@ ExecutableQueryPlan::instantiate(CompiledQueryPlan& compiledQueryPlan, const Sou
     ownedAdaptiveStages[pendingSink.stage_index] = std::move(sink);
 
     // Create sources from descriptors.
-    // Source target_stage_indices already include sink stage indices from the compiler.
+    std::vector<std::unique_ptr<SourceHandle>> instantiatedSources;
     for (const auto& sourceInfo : compiledQueryPlan.sources)
     {
-        std::vector<std::weak_ptr<ExecutablePipeline>> successorPipelines;
-
-        // Create the source handle
         auto sourceHandle = sourceProvider.lower(sourceInfo.originId, backpressureListener, sourceInfo.descriptor);
-
-        instantiatedSources.emplace_back(std::move(sourceHandle), std::move(successorPipelines));
+        instantiatedSources.emplace_back(std::move(sourceHandle));
     }
 
     return std::make_unique<ExecutableQueryPlan>(
         compiledQueryPlan.localQueryId,
-        std::move(pipelines),
         std::move(instantiatedSources),
         std::move(ownedAdaptiveStages),
         std::move(edges));
@@ -108,12 +78,10 @@ ExecutableQueryPlan::instantiate(CompiledQueryPlan& compiledQueryPlan, const Sou
 
 ExecutableQueryPlan::ExecutableQueryPlan(
     LocalQueryId localQueryId,
-    std::vector<std::shared_ptr<ExecutablePipeline>> pipelines,
-    std::vector<SourceWithSuccessor> instantiatedSources,
+    std::vector<std::unique_ptr<SourceHandle>> instantiatedSources,
     std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> ownedAdaptiveStages,
     std::vector<adaptive_engine::Edge> edges)
     : localQueryId(localQueryId)
-    , pipelines(std::move(pipelines))
     , sources(std::move(instantiatedSources))
     , ownedAdaptiveStages_(std::move(ownedAdaptiveStages))
     , edges_(std::move(edges))

@@ -21,7 +21,6 @@
 #include <Util/Logger/Formatter.hpp>
 #include <adaptive_engine/Engine.hpp>
 #include <CompiledQueryPlan.hpp>
-#include <ExecutablePipelineStage.hpp>
 #include <Sources/SourceHandle.hpp>
 
 namespace NES
@@ -29,40 +28,10 @@ namespace NES
 
 class SourceProvider;
 
-/// Internal structure for tracking instantiated pipelines with their successors.
-/// Used during the transition period while we migrate from the old execution model.
-struct ExecutablePipeline
-{
-    PipelineId id;
-    std::unique_ptr<ExecutablePipelineStage> stage;
-    std::vector<std::weak_ptr<ExecutablePipeline>> successors;
-
-    /// Constructor with all required fields
-    ExecutablePipeline(
-        PipelineId id,
-        std::unique_ptr<ExecutablePipelineStage> stage,
-        std::vector<std::weak_ptr<ExecutablePipeline>> successors)
-        : id(id), stage(std::move(stage)), successors(std::move(successors))
-    {
-    }
-
-    static std::shared_ptr<ExecutablePipeline> create(
-        PipelineId id,
-        std::unique_ptr<ExecutablePipelineStage> stage,
-        std::vector<std::weak_ptr<ExecutablePipeline>> successors)
-    {
-        return std::make_shared<ExecutablePipeline>(id, std::move(stage), std::move(successors));
-    }
-};
-
 /// The ExecutableQueryPlan represents a query with completely instantiated query processing components.
-/// It holds both the legacy ExecutablePipeline structures and the compiled adaptive_engine stages.
-///
-/// TODO(US-031): Migrate to fully use adaptive_engine::QueryPlan for submission to the engine.
+/// It holds the adaptive_engine stages and source handles ready for submission to the engine.
 struct ExecutableQueryPlan
 {
-    using SourceWithSuccessor = std::pair<std::unique_ptr<SourceHandle>, std::vector<std::weak_ptr<ExecutablePipeline>>>;
-
     /// Instantiate a compiled query plan into an executable form.
     /// This creates concrete sources and sinks from descriptors and links the pipeline DAG.
     /// @param compiledQueryPlan The compiled query plan with stages and edges
@@ -73,8 +42,7 @@ struct ExecutableQueryPlan
 
     ExecutableQueryPlan(
         LocalQueryId localQueryId,
-        std::vector<std::shared_ptr<ExecutablePipeline>> pipelines,
-        std::vector<SourceWithSuccessor> instantiatedSources,
+        std::vector<std::unique_ptr<SourceHandle>> instantiatedSources,
         std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> ownedAdaptiveStages,
         std::vector<adaptive_engine::Edge> edges);
 
@@ -89,13 +57,12 @@ struct ExecutableQueryPlan
     [[nodiscard]] const std::vector<adaptive_engine::Edge>& getEdges() const { return edges_; }
 
     LocalQueryId localQueryId;
-    std::vector<std::shared_ptr<ExecutablePipeline>> pipelines;
-    std::vector<SourceWithSuccessor> sources;
+    std::vector<std::unique_ptr<SourceHandle>> sources;
 
     friend std::ostream& operator<<(std::ostream& os, const ExecutableQueryPlan& executableQueryPlan);
 
 private:
-    /// Ownership of adaptive_engine::PipelineStage instances (CompiledExecutablePipelineStage)
+    /// Ownership of adaptive_engine::PipelineStage instances
     std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> ownedAdaptiveStages_;
 
     /// Edge definitions for the stage DAG

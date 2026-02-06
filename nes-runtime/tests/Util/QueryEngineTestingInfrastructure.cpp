@@ -48,7 +48,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <ErrorHandling.hpp>
-#include <ExecutablePipelineStage.hpp>
 #include <ExecutableQueryPlan.hpp>
 #include <Listeners/QueryLog.hpp>
 #include <QueryEngine.hpp>
@@ -483,7 +482,7 @@ QueryPlanBuilder::TestPlanCtrl QueryPlanBuilder::build(LocalQueryId queryId, std
 {
     auto isSource = std::ranges::views::filter([](const std::pair<identifier_t, QueryComponentDescriptor>& kv)
                                                { return std::holds_alternative<SourceDescriptor>(kv.second); });
-    std::vector<std::pair<std::unique_ptr<SourceHandle>, std::vector<std::weak_ptr<ExecutablePipeline>>>> sources;
+    std::vector<std::unique_ptr<SourceHandle>> sources;
 
     std::vector<std::shared_ptr<ExecutablePipeline>> pipelines;
     std::unordered_map<identifier_t, OriginId> sourceIds;
@@ -538,20 +537,21 @@ QueryPlanBuilder::TestPlanCtrl QueryPlanBuilder::build(LocalQueryId queryId, std
 
     for (auto source : objects | isSource)
     {
+        // Build successor pipelines (needed for legacy pipeline tracking)
         std::vector<std::weak_ptr<ExecutablePipeline>> successors;
         std::ranges::transform(forwardRelations.at(source.first), std::back_inserter(successors), getOrCreatePipeline);
         auto [s, ctrl] = getTestSource(backpressureListener, std::get<SourceDescriptor>(source.second).sourceId, bm);
         sourceIds.emplace(source.first, s->getSourceId());
-        sources.emplace_back(std::move(s), std::move(successors));
+        sources.emplace_back(std::move(s));
         sourceCtrls[source.first] = ctrl;
     }
 
-    // Create empty adaptive stages and edges for now - the actual stages are legacy ExecutablePipeline
+    // Create empty adaptive stages and edges - the NES test infra uses QueryEngine which wraps the adaptive engine
     std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> adaptiveStages;
     std::vector<adaptive_engine::Edge> edges;
 
     return {
-        .query = std::make_unique<ExecutableQueryPlan>(queryId, std::move(pipelines), std::move(sources), std::move(adaptiveStages), std::move(edges)),
+        .query = std::make_unique<ExecutableQueryPlan>(queryId, std::move(sources), std::move(adaptiveStages), std::move(edges)),
         .sourceIds = sourceIds,
         .pipelineIds = pipelineIds,
         .sourceCtrls = sourceCtrls,

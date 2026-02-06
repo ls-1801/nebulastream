@@ -29,7 +29,6 @@
 #include <SinksParsing/Format.hpp>
 #include <Util/Logger/Formatter.hpp>
 #include <Checksum.hpp>
-#include <PipelineExecutionContext.hpp>
 
 namespace NES
 {
@@ -41,9 +40,6 @@ namespace NES
 class ChecksumSink : public Sink
 {
 public:
-    /// Bring NesPipelineStage overloads into scope (prevents -Woverloaded-virtual from dual inheritance)
-    using NesPipelineStage::execute;
-
     static constexpr std::string_view NAME = "Checksum";
     explicit ChecksumSink(BackpressureController backpressureController, const SinkDescriptor& sinkDescriptor);
 
@@ -51,12 +47,6 @@ public:
     void start(adaptive_engine::ExecutionContext& ctx) override;
     void stop(adaptive_engine::ExecutionContext& ctx) override;
     [[nodiscard]] std::string get_id() const override;
-
-    /// --- Legacy ExecutablePipelineStage interface (to be removed in US-029+) ---
-    /// Opens file and writes schema to file, if the file is empty.
-    void start(PipelineExecutionContext&) override;
-    void stop(PipelineExecutionContext&) override;
-    void execute(const TupleBuffer& inputBuffer, PipelineExecutionContext&) override;
     static DescriptorConfig::Config validateAndFormat(std::unordered_map<std::string, std::string> config);
 
 protected:
