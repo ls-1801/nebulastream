@@ -47,6 +47,7 @@ public:
     virtual void start(NES::PipelineExecutionContext& pipelineExecutionContext) = 0;
     virtual void execute(const NES::TupleBuffer& inputTupleBuffer, NES::PipelineExecutionContext& pipelineExecutionContext) = 0;
     virtual void stop(NES::PipelineExecutionContext& pipelineExecutionContext) = 0;
+    virtual std::ostream& toString(std::ostream& os) const { return os << "TestExecutablePipelineStage"; }
 };
 
 namespace NES
@@ -161,36 +162,53 @@ private:
 /// Maps a pipeline task to a specific worker thread and therefore allows a test task queue to execute a specific task on a specific worker.
 struct TestPipelineTask
 {
-    using ExecuteFn = std::function<void(const TupleBuffer&, PipelineExecutionContext&)>;
-
     TestPipelineTask() : workerThreadId(INVALID<WorkerThreadId>) { };
 
     TestPipelineTask(const WorkerThreadId workerThreadId, TupleBuffer tupleBuffer, std::shared_ptr<TestExecutablePipelineStage> eps)
-        : workerThreadId(workerThreadId), tupleBuffer(std::move(tupleBuffer)),
-          executeFn([e = std::move(eps)](const TupleBuffer& buf, PipelineExecutionContext& ctx) { e->execute(buf, ctx); })
+        : workerThreadId(workerThreadId), tupleBuffer(std::move(tupleBuffer)), eps(std::move(eps))
     {
     }
 
     TestPipelineTask(TupleBuffer tupleBuffer, std::shared_ptr<TestExecutablePipelineStage> eps)
-        : workerThreadId(INVALID<WorkerThreadId>), tupleBuffer(std::move(tupleBuffer)),
-          executeFn([e = std::move(eps)](const TupleBuffer& buf, PipelineExecutionContext& ctx) { e->execute(buf, ctx); })
+        : workerThreadId(INVALID<WorkerThreadId>), tupleBuffer(std::move(tupleBuffer)), eps(std::move(eps))
     {
     }
 
-    /// Constructor accepting any type with execute(const TupleBuffer&, PipelineExecutionContext&) method
+    /// Constructor accepting CompiledExecutablePipelineStage (or any type with the legacy PipelineExecutionContext interface).
+    /// Wraps the stage in a TestExecutablePipelineStage adapter.
     template <typename T>
     TestPipelineTask(const WorkerThreadId workerThreadId, TupleBuffer tupleBuffer, std::shared_ptr<T> stage)
         : workerThreadId(workerThreadId), tupleBuffer(std::move(tupleBuffer)),
-          executeFn([s = std::move(stage)](const TupleBuffer& buf, PipelineExecutionContext& ctx) { s->execute(buf, ctx); })
+          eps(std::make_shared<StageAdapter<T>>(std::move(stage)))
+    {
+    }
+
+    /// 2-arg template constructor (no explicit WorkerThreadId)
+    template <typename T>
+    TestPipelineTask(TupleBuffer tupleBuffer, std::shared_ptr<T> stage)
+        : workerThreadId(INVALID<WorkerThreadId>), tupleBuffer(std::move(tupleBuffer)),
+          eps(std::make_shared<StageAdapter<T>>(std::move(stage)))
     {
     }
 
     /// Executes the TestablePipelineTask, passing the pipelineExecutionContext into its 'execute' function
-    void execute(TestPipelineExecutionContext& pec) const { executeFn(tupleBuffer, pec); }
+    void execute(TestPipelineExecutionContext& pec) const { eps->execute(tupleBuffer, pec); }
 
     WorkerThreadId workerThreadId;
     TupleBuffer tupleBuffer;
-    ExecuteFn executeFn;
+    std::shared_ptr<TestExecutablePipelineStage> eps;
+
+private:
+    /// Adapter that wraps any type with the legacy PipelineExecutionContext-based execute interface
+    template <typename T>
+    struct StageAdapter final : TestExecutablePipelineStage
+    {
+        explicit StageAdapter(std::shared_ptr<T> s) : stage(std::move(s)) { }
+        void start(PipelineExecutionContext& ctx) override { stage->start(ctx); }
+        void execute(const TupleBuffer& buf, PipelineExecutionContext& ctx) override { stage->execute(buf, ctx); }
+        void stop(PipelineExecutionContext& ctx) override { stage->stop(ctx); }
+        std::shared_ptr<T> stage;
+    };
 };
 
 struct WorkTask

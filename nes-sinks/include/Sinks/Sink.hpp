@@ -33,6 +33,9 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const Sink& sink);
 
     BackpressureController backpressureController;
+
+protected:
+    virtual std::ostream& toString(std::ostream& os) const = 0;
 };
 
 }

@@ -25,7 +25,6 @@
 
 namespace NES
 {
-/// Forward declaration of QueryEngineTest, which includes Task, which includes SinkMedium, which includes NodeEngine
 class QueryTracker;
 
 /// @brief this class represents the interface and entrance point into the
