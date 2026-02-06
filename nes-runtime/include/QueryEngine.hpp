@@ -34,7 +34,6 @@ class BufferManager;
 struct QueryLog;
 class NesBufferProvider;
 struct StatisticListener;
-class PipelineExecutionContext;
 
 /// The QueryEngine wraps the adaptive_engine::Engine and provides the NES-specific
 /// interface for starting, stopping, and managing query execution.
@@ -43,10 +42,7 @@ class PipelineExecutionContext;
 /// ExecutableQueryPlan) and the adaptive_engine's execution model (using QueryId and
 /// QueryPlan).
 ///
-/// For backward compatibility with tests using the legacy ExecutablePipelineStage interface,
-/// this class supports two execution paths:
-/// 1. Legacy path: Uses ExecutablePipeline structures with SourceHandle (when adaptiveStages is empty)
-/// 2. Adaptive path: Uses adaptive_engine::QueryPlan (when adaptiveStages is populated)
+/// All queries are executed through the adaptive engine path.
 class QueryEngine
 {
 public:
