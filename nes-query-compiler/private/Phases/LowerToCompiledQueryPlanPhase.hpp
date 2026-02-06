@@ -16,7 +16,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -39,21 +38,15 @@ public:
     std::unique_ptr<CompiledQueryPlan> apply(const std::shared_ptr<PipelinedQueryPlan>& pipelineQueryPlan);
 
 private:
-    /// Process successors recursively, creating stages and tracking edges
-    /// Returns the stage index if a stage was created/found
-    std::optional<uint64_t> processSuccessor(
-        const std::optional<uint64_t>& predecessorStageIndex,
-        const std::optional<OperatorId>& sourceOperatorId,
-        const std::shared_ptr<Pipeline>& pipeline);
+    /// Process successors recursively, creating stages and tracking edges.
+    /// Always returns the stage index of the created/found stage.
+    uint64_t processSuccessor(const std::shared_ptr<Pipeline>& pipeline);
 
     /// Process a source pipeline
     void processSource(const std::shared_ptr<Pipeline>& pipeline);
 
-    /// Process a sink pipeline
-    void processSink(
-        const std::optional<uint64_t>& predecessorStageIndex,
-        const std::optional<OperatorId>& sourceOperatorId,
-        const std::shared_ptr<Pipeline>& pipeline);
+    /// Process a sink pipeline, reserving a stage index for later instantiation
+    uint64_t processSink(const std::shared_ptr<Pipeline>& pipeline);
 
     /// Process an operator pipeline, creating a stage
     uint64_t processOperatorPipeline(const std::shared_ptr<Pipeline>& pipeline);
@@ -65,7 +58,7 @@ private:
     std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> stages_;
     std::vector<adaptive_engine::Edge> edges_;
     std::vector<CompiledQueryPlan::SourceInfo> sources_;
-    std::vector<CompiledQueryPlan::SinkInfo> sinks_;
+    std::vector<CompiledQueryPlan::PendingSink> pending_sinks_;
 
     /// Map from PipelineId to stage index for deduplication
     std::unordered_map<PipelineId, uint64_t> pipelineToStageIndex_;

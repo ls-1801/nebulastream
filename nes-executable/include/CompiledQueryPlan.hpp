@@ -41,13 +41,14 @@ struct CompiledQueryPlan
         std::vector<uint64_t> target_stage_indices;  ///< Indices into stages vector
     };
 
-    /// Sink descriptor with information about which stage(s) feed into it
-    struct SinkInfo
+    /// Sink descriptor with its reserved stage index in the stages vector.
+    /// The stages vector has a nullptr at stage_index; the actual sink is instantiated
+    /// from the descriptor during query instantiation (ExecutableQueryPlan::instantiate).
+    struct PendingSink
     {
+        uint64_t stage_index;  ///< Index in stages vector (nullptr placeholder)
         PipelineId pipelineId;
         SinkDescriptor descriptor;
-        std::vector<uint64_t> predecessor_stage_indices;  ///< Indices into stages vector (empty if from source)
-        std::vector<OperatorId> predecessor_sources;       ///< Source operator IDs that feed directly to sink
     };
 
     /// Create a CompiledQueryPlan
@@ -56,7 +57,7 @@ struct CompiledQueryPlan
         std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> stages,
         std::vector<adaptive_engine::Edge> edges,
         std::vector<SourceInfo> sources,
-        std::vector<SinkInfo> sinks);
+        std::vector<PendingSink> pending_sinks);
 
     LocalQueryId localQueryId;
 
@@ -69,8 +70,9 @@ struct CompiledQueryPlan
     /// Source descriptors with target stage mappings
     std::vector<SourceInfo> sources;
 
-    /// Sink descriptors with predecessor mappings
-    std::vector<SinkInfo> sinks;
+    /// Sink descriptors with reserved stage indices.
+    /// The stages vector has nullptr at each pending_sink's stage_index.
+    std::vector<PendingSink> pending_sinks;
 };
 
 }  // namespace NES

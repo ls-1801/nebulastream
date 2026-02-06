@@ -25,7 +25,7 @@ std::unique_ptr<CompiledQueryPlan> CompiledQueryPlan::create(
     std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> stages,
     std::vector<adaptive_engine::Edge> edges,
     std::vector<SourceInfo> sources,
-    std::vector<SinkInfo> sinks)
+    std::vector<PendingSink> pending_sinks)
 {
     // Use raw new since make_unique requires default constructor
     auto* rawPlan = new CompiledQueryPlan{
@@ -33,7 +33,7 @@ std::unique_ptr<CompiledQueryPlan> CompiledQueryPlan::create(
         std::move(stages),
         std::move(edges),
         std::move(sources),
-        std::move(sinks)
+        std::move(pending_sinks)
     };
     return std::unique_ptr<CompiledQueryPlan>(rawPlan);
 }

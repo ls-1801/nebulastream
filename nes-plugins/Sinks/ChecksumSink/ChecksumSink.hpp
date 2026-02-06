@@ -41,6 +41,9 @@ namespace NES
 class ChecksumSink : public Sink
 {
 public:
+    /// Bring NesPipelineStage overloads into scope (prevents -Woverloaded-virtual from dual inheritance)
+    using NesPipelineStage::execute;
+
     static constexpr std::string_view NAME = "Checksum";
     explicit ChecksumSink(BackpressureController backpressureController, const SinkDescriptor& sinkDescriptor);
 

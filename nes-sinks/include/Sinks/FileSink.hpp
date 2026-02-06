@@ -38,6 +38,9 @@ namespace NES
 class FileSink final : public Sink
 {
 public:
+    /// Bring NesPipelineStage::execute into scope (prevents -Woverloaded-virtual from dual inheritance)
+    using NesPipelineStage::execute;
+
     static constexpr std::string_view NAME = "File";
     explicit FileSink(BackpressureController backpressureController, const SinkDescriptor& sinkDescriptor);
     ~FileSink() override = default;

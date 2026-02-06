@@ -14,25 +14,20 @@
 
 #include <ExecutableQueryPlan.hpp>
 
-#include <algorithm>
 #include <cstddef>
-#include <cstdint>
 #include <functional>
-#include <iterator>
 #include <memory>
 #include <ostream>
-#include <unordered_map>
+#include <string>
 #include <utility>
 #include <vector>
 #include <Identifiers/Identifiers.hpp>
-#include <Runtime/AbstractBufferProvider.hpp>
 #include <Sinks/SinkProvider.hpp>
 #include <Sources/SourceHandle.hpp>
 #include <Sources/SourceProvider.hpp>
 #include <BackpressureChannel.hpp>
 #include <CompiledQueryPlan.hpp>
 #include <ErrorHandling.hpp>
-#include <ExecutablePipelineStage.hpp>
 
 namespace NES
 {
@@ -72,46 +67,30 @@ ExecutableQueryPlan::instantiate(CompiledQueryPlan& compiledQueryPlan, const Sou
 
     auto [backpressureController, backpressureListener] = createBackpressureChannel();
 
-    if (compiledQueryPlan.sinks.size() != 1)
+    if (compiledQueryPlan.pending_sinks.size() != 1)
     {
         throw NotImplemented("Currently our execution model expects exactly one sink per query plan");
     }
 
-    // Take ownership of the adaptive stages from the compiled plan
-    // These implement adaptive_engine::PipelineStage (CompiledExecutablePipelineStage)
+    // Take ownership of the adaptive stages from the compiled plan.
+    // The stages vector includes nullptr placeholders at sink indices.
     std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> ownedAdaptiveStages = std::move(compiledQueryPlan.stages);
 
-    // Take the edges from the compiled plan
+    // Take the edges from the compiled plan (includes edges to sink stages)
     std::vector<adaptive_engine::Edge> edges = std::move(compiledQueryPlan.edges);
 
-    // Create sink using the legacy interface
-    auto& sinkInfo = compiledQueryPlan.sinks.front();
-    auto sink = ExecutablePipeline::create(
-        sinkInfo.pipelineId, lower(std::move(backpressureController), sinkInfo.descriptor), {});
-    pipelines.push_back(sink);
+    // Instantiate the sink from its descriptor and fill in the stages vector.
+    // Sink inherits from NesPipelineStage (adaptive_engine::PipelineStage), so the
+    // unique_ptr<Sink> upcasts to unique_ptr<PipelineStage> via public inheritance.
+    auto& pendingSink = compiledQueryPlan.pending_sinks.front();
+    auto sink = lower(std::move(backpressureController), pendingSink.descriptor);
+    ownedAdaptiveStages[pendingSink.stage_index] = std::move(sink);
 
-    // Build a map from stage index to ExecutablePipeline for linking
-    // Note: In the new model, stages are already built. For legacy compatibility, we wrap the adaptive
-    // stages in ExecutablePipeline but they don't really "own" the stage (it's owned by ownedAdaptiveStages).
-    // The actual execution will use the adaptive stages directly in US-031.
-
-    // Track which sources feed directly to sink (source -> sink case without intermediate stages)
-    std::unordered_map<OperatorId, bool> sourceFeedsSink;
-    for (const auto& srcId : sinkInfo.predecessor_sources)
-    {
-        sourceFeedsSink[srcId] = true;
-    }
-
-    // Create sources from descriptors
+    // Create sources from descriptors.
+    // Source target_stage_indices already include sink stage indices from the compiler.
     for (const auto& sourceInfo : compiledQueryPlan.sources)
     {
         std::vector<std::weak_ptr<ExecutablePipeline>> successorPipelines;
-
-        // If source feeds directly to sink, add sink as successor
-        if (sourceFeedsSink.contains(sourceInfo.operatorId))
-        {
-            successorPipelines.push_back(sink);
-        }
 
         // Create the source handle
         auto sourceHandle = sourceProvider.lower(sourceInfo.originId, backpressureListener, sourceInfo.descriptor);

@@ -39,6 +39,11 @@ namespace NES
 class PrintSink final : public Sink
 {
 public:
+    /// Bring NesPipelineStage overloads into scope (prevents -Woverloaded-virtual from dual inheritance)
+    using NesPipelineStage::start;
+    using NesPipelineStage::execute;
+    using NesPipelineStage::stop;
+
     static constexpr std::string_view NAME = "Print";
 
     explicit PrintSink(BackpressureController backpressureController, const SinkDescriptor& sinkDescriptor);

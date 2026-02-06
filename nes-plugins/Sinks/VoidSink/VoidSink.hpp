@@ -35,6 +35,11 @@ namespace NES
 class VoidSink final : public Sink
 {
 public:
+    /// Bring NesPipelineStage overloads into scope (prevents -Woverloaded-virtual from dual inheritance)
+    using NesPipelineStage::start;
+    using NesPipelineStage::execute;
+    using NesPipelineStage::stop;
+
     static constexpr std::string_view NAME = "Void";
     explicit VoidSink(BackpressureController backpressureController, const SinkDescriptor& sinkDescriptor);
 

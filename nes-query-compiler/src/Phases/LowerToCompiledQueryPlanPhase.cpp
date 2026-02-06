@@ -14,11 +14,8 @@
 
 #include <Phases/LowerToCompiledQueryPlanPhase.hpp>
 
-#include <algorithm>
 #include <cstdint>
 #include <memory>
-#include <optional>
-#include <ranges>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -40,17 +37,13 @@
 namespace NES
 {
 
-std::optional<uint64_t> LowerToCompiledQueryPlanPhase::processSuccessor(
-    const std::optional<uint64_t>& predecessorStageIndex,
-    const std::optional<OperatorId>& sourceOperatorId,
-    const std::shared_ptr<Pipeline>& pipeline)
+uint64_t LowerToCompiledQueryPlanPhase::processSuccessor(const std::shared_ptr<Pipeline>& pipeline)
 {
     PRECONDITION(pipeline->isSinkPipeline() || pipeline->isOperatorPipeline(), "expected a Sink or OperatorPipeline");
 
     if (pipeline->isSinkPipeline())
     {
-        processSink(predecessorStageIndex, sourceOperatorId, pipeline);
-        return std::nullopt;
+        return processSink(pipeline);
     }
     return processOperatorPipeline(pipeline);
 }
@@ -69,41 +62,34 @@ void LowerToCompiledQueryPlanPhase::processSource(const std::shared_ptr<Pipeline
 
     for (const auto& successor : pipeline->getSuccessors())
     {
-        if (auto stageIndex = processSuccessor(std::nullopt, sourceOperator.id, successor))
-        {
-            sourceInfo.target_stage_indices.push_back(*stageIndex);
-        }
+        auto stageIndex = processSuccessor(successor);
+        sourceInfo.target_stage_indices.push_back(stageIndex);
     }
 
     sources_.push_back(std::move(sourceInfo));
 }
 
-void LowerToCompiledQueryPlanPhase::processSink(
-    const std::optional<uint64_t>& predecessorStageIndex,
-    const std::optional<OperatorId>& sourceOperatorId,
-    const std::shared_ptr<Pipeline>& pipeline)
+uint64_t LowerToCompiledQueryPlanPhase::processSink(const std::shared_ptr<Pipeline>& pipeline)
 {
+    /// Check if the sink already exists in the map (deduplication for fan-in)
+    if (const auto it = pipelineToStageIndex_.find(pipeline->getPipelineId()); it != pipelineToStageIndex_.end())
+    {
+        return it->second;
+    }
+
+    /// Reserve a stage index for the sink (nullptr placeholder, filled at instantiation time)
+    auto stageIndex = static_cast<uint64_t>(stages_.size());
+    stages_.push_back(nullptr);
+    pipelineToStageIndex_.emplace(pipeline->getPipelineId(), stageIndex);
+
+    /// Record the pending sink descriptor for instantiation
     const auto sinkDescriptor = pipeline->getRootOperator().get<SinkPhysicalOperator>().getDescriptor();
+    pending_sinks_.emplace_back(CompiledQueryPlan::PendingSink{
+        .stage_index = stageIndex,
+        .pipelineId = PipelineId(pipeline->getPipelineId()),
+        .descriptor = sinkDescriptor});
 
-    auto it = std::ranges::find(sinks_, pipeline->getPipelineId(), &CompiledQueryPlan::SinkInfo::pipelineId);
-    if (it == sinks_.end())
-    {
-        sinks_.emplace_back(CompiledQueryPlan::SinkInfo{
-            .pipelineId = PipelineId(pipeline->getPipelineId()),
-            .descriptor = sinkDescriptor,
-            .predecessor_stage_indices = {},
-            .predecessor_sources = {}});
-        it = sinks_.end() - 1;
-    }
-
-    if (predecessorStageIndex.has_value())
-    {
-        it->predecessor_stage_indices.push_back(*predecessorStageIndex);
-    }
-    if (sourceOperatorId.has_value())
-    {
-        it->predecessor_sources.push_back(*sourceOperatorId);
-    }
+    return stageIndex;
 }
 
 std::unique_ptr<adaptive_engine::PipelineStage>
@@ -171,10 +157,8 @@ uint64_t LowerToCompiledQueryPlanPhase::processOperatorPipeline(const std::share
     /// Process successors and create edges
     for (const auto& successor : pipeline->getSuccessors())
     {
-        if (auto successorStageIndex = processSuccessor(stageIndex, std::nullopt, successor))
-        {
-            edges_.push_back(adaptive_engine::Edge{.source_stage = stageIndex, .target_stage = *successorStageIndex});
-        }
+        auto successorStageIndex = processSuccessor(successor);
+        edges_.push_back(adaptive_engine::Edge{.source_stage = stageIndex, .target_stage = successorStageIndex});
     }
 
     return stageIndex;
@@ -189,7 +173,7 @@ LowerToCompiledQueryPlanPhase::apply(const std::shared_ptr<PipelinedQueryPlan>& 
     stages_.clear();
     edges_.clear();
     sources_.clear();
-    sinks_.clear();
+    pending_sinks_.clear();
     pipelineToStageIndex_.clear();
 
     /// Process all pipelines recursively starting from sources
@@ -199,7 +183,7 @@ LowerToCompiledQueryPlanPhase::apply(const std::shared_ptr<PipelinedQueryPlan>& 
     }
 
     return CompiledQueryPlan::create(
-        pipelineQueryPlan->getQueryId(), std::move(stages_), std::move(edges_), std::move(sources_), std::move(sinks_));
+        pipelineQueryPlan->getQueryId(), std::move(stages_), std::move(edges_), std::move(sources_), std::move(pending_sinks_));
 }
 
 }  // namespace NES
