@@ -21,6 +21,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <adaptive_engine/ExecutionContext.hpp>
 
 #include <Configurations/Descriptor.hpp>
 #include <Runtime/TupleBuffer.hpp>
@@ -71,6 +72,20 @@ void PrintSink::execute(const TupleBuffer& inputBuffer, PipelineExecutionContext
     const auto bufferAsString = outputParser->getFormattedBuffer(inputBuffer);
     *(*outputStream.wlock()) << bufferAsString << '\n';
     std::this_thread::sleep_for(std::chrono::milliseconds{ingestion});
+}
+
+void PrintSink::doExecute(adaptive_engine::ExecutionContext& /*ctx*/, TupleBuffer& inputBuffer)
+{
+    PRECONDITION(inputBuffer, "Invalid input buffer in PrintSink.");
+
+    const auto bufferAsString = outputParser->getFormattedBuffer(inputBuffer);
+    *(*outputStream.wlock()) << bufferAsString << '\n';
+    std::this_thread::sleep_for(std::chrono::milliseconds{ingestion});
+}
+
+std::string PrintSink::get_id() const
+{
+    return std::string(NAME);
 }
 
 std::ostream& PrintSink::toString(std::ostream& str) const

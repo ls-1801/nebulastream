@@ -23,6 +23,7 @@
 #include <system_error>
 #include <unordered_map>
 #include <utility>
+#include <adaptive_engine/ExecutionContext.hpp>
 
 #include <fmt/format.h>
 #include <magic_enum/magic_enum.hpp>
@@ -67,6 +68,76 @@ std::ostream& FileSink::toString(std::ostream& str) const
     str << fmt::format("FileSink(filePathOutput: {}, isAppend: {})", outputFilePath, isAppend);
     return str;
 }
+
+/// --- adaptive_engine::PipelineStage interface (via NesPipelineStage) ---
+
+void FileSink::start(adaptive_engine::ExecutionContext& /*ctx*/)
+{
+    NES_DEBUG("Setting up file sink: {}", *this);
+    const auto stream = outputFileStream.wlock();
+    /// Remove an existing file unless the isAppend mode is isAppend.
+    if (!isAppend)
+    {
+        if (std::filesystem::exists(outputFilePath.c_str()))
+        {
+            if (std::error_code ec; !std::filesystem::remove(outputFilePath.c_str(), ec))
+            {
+                isOpen = false;
+                throw CannotOpenSink("Could not remove existing output file: filePath={} ", outputFilePath);
+            }
+        }
+    }
+
+    /// Open the file stream
+    if (!stream->is_open())
+    {
+        stream->open(outputFilePath, std::ofstream::binary | std::ofstream::app);
+    }
+    isOpen = stream->is_open() && stream->good();
+    if (!isOpen)
+    {
+        throw CannotOpenSink(
+            "Could not open output file; filePathOutput={}, is_open()={}, good={}", outputFilePath, stream->is_open(), stream->good());
+    }
+
+    /// Write the schema to the file, if it is empty.
+    if (stream->tellp() == 0)
+    {
+        const auto schemaStr = formatter->getFormattedSchema();
+        stream->write(schemaStr.c_str(), static_cast<int64_t>(schemaStr.length()));
+    }
+}
+
+void FileSink::doExecute(adaptive_engine::ExecutionContext& /*ctx*/, TupleBuffer& inputTupleBuffer)
+{
+    PRECONDITION(inputTupleBuffer, "Invalid input buffer in FileSink.");
+    PRECONDITION(isOpen, "Sink was not opened");
+
+    {
+        auto fBuffer = formatter->getFormattedBuffer(inputTupleBuffer);
+        NES_TRACE("Writing tuples to file sink; filePathOutput={}, fBuffer={}", outputFilePath, fBuffer);
+        {
+            const auto wlocked = outputFileStream.wlock();
+            wlocked->write(fBuffer.c_str(), static_cast<long>(fBuffer.size()));
+            wlocked->flush();
+        }
+    }
+}
+
+void FileSink::stop(adaptive_engine::ExecutionContext& /*ctx*/)
+{
+    NES_DEBUG("Closing file sink, filePathOutput={}", outputFilePath);
+    const auto stream = outputFileStream.wlock();
+    stream->flush();
+    stream->close();
+}
+
+std::string FileSink::get_id() const
+{
+    return std::string(NAME);
+}
+
+/// --- Legacy ExecutablePipelineStage interface (to be removed in US-029+) ---
 
 void FileSink::start(PipelineExecutionContext&)
 {

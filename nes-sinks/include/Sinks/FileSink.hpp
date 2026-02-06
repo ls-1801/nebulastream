@@ -47,6 +47,12 @@ public:
     FileSink(FileSink&&) = delete;
     FileSink& operator=(FileSink&&) = delete;
 
+    /// --- adaptive_engine::PipelineStage interface (via NesPipelineStage) ---
+    void start(adaptive_engine::ExecutionContext& ctx) override;
+    void stop(adaptive_engine::ExecutionContext& ctx) override;
+    [[nodiscard]] std::string get_id() const override;
+
+    /// --- Legacy ExecutablePipelineStage interface (to be removed in US-029+) ---
     void start(PipelineExecutionContext& pipelineExecutionContext) override;
     void execute(const TupleBuffer& inputTupleBuffer, PipelineExecutionContext& pipelineExecutionContext) override;
     void stop(PipelineExecutionContext& pipelineExecutionContext) override;
@@ -54,8 +60,10 @@ public:
     static DescriptorConfig::Config validateAndFormat(std::unordered_map<std::string, std::string> config);
 
 protected:
-    std::ostream& toString(std::ostream& str) const override;
+    /// Process a TupleBuffer (new adaptive engine path via NesPipelineStage)
+    void doExecute(adaptive_engine::ExecutionContext& ctx, TupleBuffer& buffer) override;
 
+    std::ostream& toString(std::ostream& str) const override;
 
 private:
     std::string outputFilePath;
