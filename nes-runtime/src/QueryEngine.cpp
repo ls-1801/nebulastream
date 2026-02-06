@@ -59,14 +59,15 @@ QueryEngine::~QueryEngine()
 {
     NES_INFO("Shutting down QueryEngine");
 
-    // Clear running queries
-    runningQueries_.wlock()->clear();
-
-    // Shutdown the adaptive engine (stops all queries and worker threads)
+    // Shutdown the adaptive engine (stops all queries and worker threads).
+    // This destroys stages/sources owned by the engine via source_destroy/stage_destroy.
     if (engine_)
     {
         engine_->shutdown();
     }
+
+    // Clear running queries (plans no longer own stages/sources after releaseOwnership)
+    runningQueries_.wlock()->clear();
 
     NES_INFO("QueryEngine shutdown complete");
 }
@@ -89,8 +90,22 @@ void QueryEngine::start(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPla
     // Get the edges
     queryPlan.edges = plan->getEdges();
 
+    // Get the sources (NesSourceHandle implements adaptive_engine::SourceHandle)
+    queryPlan.sources.reserve(plan->sources.size());
+    for (const auto& source : plan->sources)
+    {
+        queryPlan.sources.push_back(source.get());
+    }
+
+    // Get the source-to-stage mappings
+    queryPlan.source_to_stage = plan->getSourceToStage();
+
     // Submit the query to the engine
     adaptive_engine::QueryId engineQueryId = engine_->submit_query(queryPlan, nullptr);
+
+    // Release ownership of stages and sources - the Rust engine now owns them
+    // and will destroy them via source_destroy/stage_destroy on shutdown/stop.
+    plan->releaseOwnership();
 
     // Store the mapping and the plan
     runningQueries_.wlock()->emplace(
@@ -121,7 +136,7 @@ void QueryEngine::stop(LocalQueryId queryId)
         static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())->onEvent(QueryStopRequest(workerThreadId_, queryId));
     }
 
-    // Find and remove the query
+    // Find and remove the query from the running map
     std::optional<RunningQuery> query;
     {
         auto locked = runningQueries_.wlock();

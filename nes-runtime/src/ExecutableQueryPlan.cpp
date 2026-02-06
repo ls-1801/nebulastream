@@ -20,7 +20,7 @@
 #include <vector>
 #include <Identifiers/Identifiers.hpp>
 #include <Sinks/SinkProvider.hpp>
-#include <Sources/SourceHandle.hpp>
+#include <NesSourceHandle.hpp>
 #include <Sources/SourceProvider.hpp>
 #include <BackpressureChannel.hpp>
 #include <CompiledQueryPlan.hpp>
@@ -61,30 +61,45 @@ ExecutableQueryPlan::instantiate(CompiledQueryPlan& compiledQueryPlan, const Sou
     auto sink = lower(std::move(backpressureController), pendingSink.descriptor);
     ownedAdaptiveStages[pendingSink.stage_index] = std::move(sink);
 
-    // Create sources from descriptors.
-    std::vector<std::unique_ptr<SourceHandle>> instantiatedSources;
+    // Create adaptive-engine source handles from descriptors.
+    // These implement adaptive_engine::SourceHandle (pull model: open/next_buffer/close)
+    // and are driven by the engine's internal source threads.
+    std::vector<std::unique_ptr<NesSourceHandle>> instantiatedSources;
     for (const auto& sourceInfo : compiledQueryPlan.sources)
     {
-        auto sourceHandle = sourceProvider.lower(sourceInfo.originId, backpressureListener, sourceInfo.descriptor);
-        instantiatedSources.emplace_back(std::move(sourceHandle));
+        auto nesSourceHandle = sourceProvider.lowerAdaptive(sourceInfo.originId, sourceInfo.descriptor);
+        instantiatedSources.emplace_back(std::move(nesSourceHandle));
+    }
+
+    // Build source-to-stage mappings from the compiled plan's target_stage_indices.
+    std::vector<std::pair<uint64_t, uint64_t>> source_to_stage;
+    for (size_t srcIdx = 0; srcIdx < compiledQueryPlan.sources.size(); ++srcIdx)
+    {
+        for (uint64_t stageIdx : compiledQueryPlan.sources[srcIdx].target_stage_indices)
+        {
+            source_to_stage.emplace_back(srcIdx, stageIdx);
+        }
     }
 
     return std::make_unique<ExecutableQueryPlan>(
         compiledQueryPlan.localQueryId,
         std::move(instantiatedSources),
         std::move(ownedAdaptiveStages),
-        std::move(edges));
+        std::move(edges),
+        std::move(source_to_stage));
 }
 
 ExecutableQueryPlan::ExecutableQueryPlan(
     LocalQueryId localQueryId,
-    std::vector<std::unique_ptr<SourceHandle>> instantiatedSources,
+    std::vector<std::unique_ptr<NesSourceHandle>> instantiatedSources,
     std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> ownedAdaptiveStages,
-    std::vector<adaptive_engine::Edge> edges)
+    std::vector<adaptive_engine::Edge> edges,
+    std::vector<std::pair<uint64_t, uint64_t>> source_to_stage)
     : localQueryId(localQueryId)
     , sources(std::move(instantiatedSources))
     , ownedAdaptiveStages_(std::move(ownedAdaptiveStages))
     , edges_(std::move(edges))
+    , source_to_stage_(std::move(source_to_stage))
 {
 }
 }  // namespace NES

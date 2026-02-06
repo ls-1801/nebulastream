@@ -21,6 +21,7 @@
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <Sources/SourceDescriptor.hpp>
 #include <Sources/SourceHandle.hpp>
+#include <NesSourceHandle.hpp>
 #include <BackpressureChannel.hpp>
 #include <ErrorHandling.hpp>
 #include <SourceRegistry.hpp>
@@ -49,6 +50,17 @@ SourceProvider::lower(OriginId originId, BackpressureListener backpressureListen
 
         return std::make_unique<SourceHandle>(
             std::move(backpressureListener), std::move(originId), std::move(runtimeConfig), bufferPool, std::move(source.value()));
+    }
+    throw UnknownSourceType("unknown source descriptor type: {}", sourceDescriptor.getSourceType());
+}
+
+std::unique_ptr<NesSourceHandle>
+SourceProvider::lowerAdaptive(OriginId originId, const SourceDescriptor& sourceDescriptor) const
+{
+    auto sourceArguments = SourceRegistryArguments(sourceDescriptor);
+    if (auto source = SourceRegistry::instance().create(sourceDescriptor.getSourceType(), sourceArguments))
+    {
+        return std::make_unique<NesSourceHandle>(std::move(source.value()), originId, bufferPool);
     }
     throw UnknownSourceType("unknown source descriptor type: {}", sourceDescriptor.getSourceType());
 }
