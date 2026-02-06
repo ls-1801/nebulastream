@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Run commands inside the NebulaStream development container.
+#
+# Usage:
+#   devc cmake -B nebulastream/build nebulastream
+#   devc cmake --build nebulastream/build -j8
+#   devc ctest --test-dir nebulastream/build -R QueryEngineTest --output-on-failure
+#   devc bash   # interactive shell
+
+set -euo pipefail
+
+WORKSPACE="$(cd "$(dirname "$0")/.." && pwd)"
+
+exec docker run --rm \
+    -v "${WORKSPACE}:/workspace" \
+    -v ccache:/ccache \
+    -e CCACHE_DIR=/ccache \
+    -w /workspace \
+    nebulastream/nes-development:local \
+    "$@"
