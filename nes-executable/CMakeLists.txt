@@ -18,6 +18,6 @@ target_include_directories(nes-executable PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../../cpp/include
     PRIVATE .
 )
-target_link_libraries(nes-executable PUBLIC nes-common nes-runtime adaptive_engine_cpp)
+target_link_libraries(nes-executable PUBLIC nes-common nes-runtime adaptive_engine)
 
 add_tests_if_enabled(tests)
