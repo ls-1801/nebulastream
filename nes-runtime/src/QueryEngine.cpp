@@ -16,7 +16,6 @@
 
 #include <chrono>
 #include <memory>
-#include <thread>
 #include <utility>
 #include <vector>
 #include <BufferManagement/NesBufferProvider.hpp>
@@ -69,30 +68,12 @@ QueryEngine::~QueryEngine()
         engine_->shutdown();
     }
 
-    // Wait for any cleanup threads to complete
-    {
-        std::lock_guard<std::mutex> lock(cleanupThreadsMutex_);
-        for (auto& thread : cleanupThreads_)
-        {
-            if (thread.joinable())
-            {
-                thread.join();
-            }
-        }
-        cleanupThreads_.clear();
-    }
-
     NES_INFO("QueryEngine shutdown complete");
 }
 
 void QueryEngine::start(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPlan> plan)
 {
-    startAdaptive(queryId, std::move(plan));
-}
-
-void QueryEngine::startAdaptive(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPlan> plan)
-{
-    NES_INFO("Starting query {} using adaptive execution path", queryId);
+    NES_INFO("Starting query {}", queryId);
 
     // Build the adaptive_engine::QueryPlan from the ExecutableQueryPlan
     adaptive_engine::QueryPlan queryPlan;

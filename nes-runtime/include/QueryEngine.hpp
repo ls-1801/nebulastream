@@ -15,10 +15,7 @@
 #pragma once
 
 #include <memory>
-#include <mutex>
-#include <thread>
 #include <unordered_map>
-#include <vector>
 #include <Identifiers/Identifiers.hpp>
 #include <QueryEngineConfiguration.hpp>
 #include <adaptive_engine/Engine.hpp>
@@ -83,9 +80,6 @@ private:
         std::unique_ptr<ExecutableQueryPlan> plan;
     };
 
-    /// Start a query using the adaptive_engine path
-    void startAdaptive(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPlan> plan);
-
     /// Configuration for the engine
     QueryEngineConfiguration config_;
 
@@ -109,10 +103,6 @@ private:
 
     /// Map from NES LocalQueryId to RunningQuery
     folly::Synchronized<std::unordered_map<LocalQueryId, RunningQuery>> runningQueries_;
-
-    /// Cleanup threads for deferred pipeline shutdown
-    std::mutex cleanupThreadsMutex_;
-    std::vector<std::thread> cleanupThreads_;
 };
 
 }  // namespace NES
