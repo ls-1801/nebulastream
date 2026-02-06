@@ -14,7 +14,9 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
+#include <thread>
 #include <unordered_map>
 #include <Identifiers/Identifiers.hpp>
 #include <QueryEngineConfiguration.hpp>
@@ -73,10 +75,15 @@ public:
     void stop(LocalQueryId queryId);
 
 private:
+    /// Handle a QueryTerminated event from the adaptive engine.
+    /// Called by the stats polling thread when a query finishes naturally.
+    void handleQueryTerminated(adaptive_engine::QueryId engineQueryId);
+
     /// Internal representation of a running query
     struct RunningQuery
     {
         adaptive_engine::QueryId engineQueryId{0};
+        LocalQueryId nesQueryId;
         std::unique_ptr<ExecutableQueryPlan> plan;
     };
 
@@ -98,11 +105,18 @@ private:
     /// The underlying adaptive execution engine
     std::unique_ptr<adaptive_engine::Engine> engine_;
 
+    /// Statistics queue for receiving events from the adaptive engine
+    std::unique_ptr<adaptive_engine::StatsQueue> statsQueue_;
+
     /// Worker thread ID for statistics events
     WorkerThreadId workerThreadId_;
 
     /// Map from NES LocalQueryId to RunningQuery
     folly::Synchronized<std::unordered_map<LocalQueryId, RunningQuery>> runningQueries_;
+
+    /// Background thread for polling statistics events
+    std::thread statsPollingThread_;
+    std::atomic<bool> stopPolling_{false};
 };
 
 }  // namespace NES

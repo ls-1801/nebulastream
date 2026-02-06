@@ -16,6 +16,8 @@
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <ErrorHandling.hpp>
 
+#include <cstring>
+
 namespace NES
 {
 
@@ -36,23 +38,34 @@ NesBufferProvider::NesBufferProvider(std::shared_ptr<AbstractBufferProvider> nes
     PRECONDITION(nesProvider_ != nullptr, "NesBufferProvider requires a valid AbstractBufferProvider");
 }
 
-adaptive_engine::BufferHandle NesBufferProvider::wrap(void* data, size_t /*size*/, const adaptive_engine::BufferMetadata& /*metadata*/)
+adaptive_engine::BufferHandle NesBufferProvider::wrap(void* data, size_t size, const adaptive_engine::BufferMetadata& metadata)
 {
-    PRECONDITION(data != nullptr, "Cannot wrap null TupleBuffer pointer");
+    PRECONDITION(data != nullptr, "Cannot wrap null data pointer");
 
-    // data is expected to be a TupleBuffer*
-    auto* tupleBufferPtr = static_cast<TupleBuffer*>(data);
+    // Allocate a new TupleBuffer and copy the raw data into it.
+    // The data pointer is raw bytes from the Rust executor, NOT a TupleBuffer*.
+    auto handle = allocate(size);
+    if (handle.opaque == nullptr)
+    {
+        return handle; // allocation failed
+    }
 
-    // Retain the buffer to increment reference count
-    tupleBufferPtr->retain();
+    auto* wrapper = static_cast<NesBufferWrapper*>(handle.opaque);
 
-    // Create wrapper with a copy of the TupleBuffer (which also increments ref count)
-    auto* wrapper = new NesBufferWrapper(*tupleBufferPtr);
+    // Copy data into the TupleBuffer's memory area
+    auto memoryArea = wrapper->buffer.getAvailableMemoryArea<uint8_t>();
+    std::memcpy(memoryArea.data(), data, size);
 
-    // Now release our retain() since the copy in wrapper holds the ref
-    tupleBufferPtr->release();
+    // Apply metadata from the Rust side
+    wrapper->metadata = metadata;
+    wrapper->buffer.setSequenceNumber(SequenceNumber(metadata.sequence_number));
+    wrapper->buffer.setOriginId(OriginId(metadata.origin_id));
+    wrapper->buffer.setWatermark(Timestamp(metadata.watermark));
+    wrapper->buffer.setNumberOfTuples(metadata.num_tuples);
+    wrapper->buffer.setChunkNumber(ChunkNumber(metadata.chunk_number));
+    wrapper->buffer.setLastChunk(metadata.last_chunk);
 
-    return adaptive_engine::BufferHandle{wrapper};
+    return handle;
 }
 
 void NesBufferProvider::release(adaptive_engine::BufferHandle handle)

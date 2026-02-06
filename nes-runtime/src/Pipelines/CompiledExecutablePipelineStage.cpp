@@ -57,11 +57,11 @@ public:
         // Get the buffer provider from the adaptive context
         auto* bufferProvider = adaptiveCtx_.get_buffer_provider();
 
-        // Create a BufferHandle by wrapping the TupleBuffer
-        // We need to cast away const since wrap() doesn't take const pointer
-        auto* mutableBuffer = const_cast<TupleBuffer*>(&buffer);
-        adaptive_engine::BufferMetadata metadata{};
-        auto handle = bufferProvider->wrap(mutableBuffer, buffer.getBufferSize(), metadata);
+        // Create a NesBufferWrapper directly from the TupleBuffer (which increments ref count).
+        // We cannot use bufferProvider->wrap() here because wrap() expects raw bytes,
+        // but we have a TupleBuffer with proper metadata that should be preserved.
+        auto* wrapper = new NesBufferWrapper(buffer);
+        adaptive_engine::BufferHandle handle{wrapper};
 
         // Emit through the adaptive context
         adaptiveCtx_.emit_buffer(handle);
@@ -99,21 +99,13 @@ public:
 
     [[nodiscard]] std::shared_ptr<AbstractBufferProvider> getBufferManager() const override
     {
-        // The buffer provider is accessed through the adaptive context
-        // Return a shared_ptr that does NOT own the provider (it's owned by the context)
         auto* provider = adaptiveCtx_.get_buffer_provider();
-        // Cast to NesBufferProvider to get the underlying AbstractBufferProvider
         auto* nesProvider = dynamic_cast<NesBufferProvider*>(provider);
         if (nesProvider == nullptr)
         {
             throw std::runtime_error("Buffer provider is not a NesBufferProvider");
         }
-        // TODO: This is a workaround - we need proper ownership management
-        // For now, return a null-deleter shared_ptr since the provider outlives this context
-        return std::shared_ptr<AbstractBufferProvider>(
-            const_cast<AbstractBufferProvider*>(reinterpret_cast<const AbstractBufferProvider*>(provider)),
-            [](AbstractBufferProvider*) {}  // No-op deleter
-        );
+        return nesProvider->getUnderlyingProvider();
     }
 
     [[nodiscard]] PipelineId getPipelineId() const override { return PipelineId(adaptiveCtx_.get_pipeline_id()); }

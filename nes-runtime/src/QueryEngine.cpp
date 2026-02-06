@@ -31,6 +31,12 @@
 namespace NES
 {
 
+namespace
+{
+/// Event type values from FfiStatisticsEventType (Rust enum).
+constexpr uint32_t FFI_EVENT_QUERY_TERMINATED = 9;
+}  // namespace
+
 QueryEngine::QueryEngine(
     const QueryEngineConfiguration& config,
     std::shared_ptr<StatisticListener> statisticsListener,
@@ -46,11 +52,42 @@ QueryEngine::QueryEngine(
 {
     NES_INFO("Creating QueryEngine with {} worker threads", config_.numWorkerThreads.getValue());
 
-    // Create the adaptive engine with our buffer provider
-    engine_ = adaptive_engine::Engine::create(bufferProvider_.get());
+    // Create the adaptive engine with statistics collection enabled
+    engine_ = adaptive_engine::Engine::create_with_stats(bufferProvider_.get(), statsQueue_);
 
     // Start the engine's worker threads
     engine_->start();
+
+    // Start background thread to poll for statistics events (e.g. QueryTerminated)
+    if (statsQueue_)
+    {
+        stopPolling_.store(false);
+        statsPollingThread_ = std::thread([this]()
+        {
+            while (!stopPolling_.load())
+            {
+                uint32_t eventType = 0;
+                uint64_t workerId = 0;
+                uint64_t queryId = 0;
+                std::string pipelineId;
+                std::string toPipelineId;
+                uint64_t taskId = 0;
+
+                bool got = statsQueue_->poll(50, eventType, workerId, queryId,
+                                             pipelineId, toPipelineId, taskId);
+                if (!got)
+                {
+                    continue;
+                }
+
+                if (eventType == FFI_EVENT_QUERY_TERMINATED)
+                {
+                    NES_DEBUG("Received QueryTerminated event for engine query {}", queryId);
+                    handleQueryTerminated(queryId);
+                }
+            }
+        });
+    }
 
     NES_INFO("QueryEngine started successfully");
 }
@@ -58,6 +95,13 @@ QueryEngine::QueryEngine(
 QueryEngine::~QueryEngine()
 {
     NES_INFO("Shutting down QueryEngine");
+
+    // Stop the polling thread before engine shutdown
+    stopPolling_.store(true);
+    if (statsPollingThread_.joinable())
+    {
+        statsPollingThread_.join();
+    }
 
     // Shutdown the adaptive engine (stops all queries and worker threads).
     // This destroys stages/sources owned by the engine via source_destroy/stage_destroy.
@@ -109,7 +153,7 @@ void QueryEngine::start(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPla
 
     // Store the mapping and the plan
     runningQueries_.wlock()->emplace(
-        queryId, RunningQuery{.engineQueryId = engineQueryId, .plan = std::move(plan)});
+        queryId, RunningQuery{.engineQueryId = engineQueryId, .nesQueryId = queryId, .plan = std::move(plan)});
 
     // Log the query start
     if (queryLog_)
@@ -176,6 +220,44 @@ void QueryEngine::stop(LocalQueryId queryId)
     if (statisticsListener_)
     {
         static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())->onEvent(QueryStop(workerThreadId_, queryId));
+    }
+}
+
+void QueryEngine::handleQueryTerminated(adaptive_engine::QueryId engineQueryId)
+{
+    // Find the NES query ID corresponding to this engine query ID
+    std::optional<LocalQueryId> nesQueryId;
+    {
+        auto locked = runningQueries_.wlock();
+        for (auto it = locked->begin(); it != locked->end(); ++it)
+        {
+            if (it->second.engineQueryId == engineQueryId)
+            {
+                nesQueryId = it->first;
+                locked->erase(it);
+                break;
+            }
+        }
+    }
+
+    if (!nesQueryId)
+    {
+        NES_DEBUG("QueryTerminated for unknown engine query {} (may have been stopped already)", engineQueryId);
+        return;
+    }
+
+    NES_INFO("Query {} terminated naturally (engine query {})", *nesQueryId, engineQueryId);
+
+    // Log the query stop in the QueryLog (this is what the systest polls)
+    if (queryLog_)
+    {
+        queryLog_->logQueryStatusChange(*nesQueryId, QueryState::Stopped, std::chrono::system_clock::now());
+    }
+
+    // Emit NES statistics events
+    if (statisticsListener_)
+    {
+        static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())->onEvent(QueryStop(workerThreadId_, *nesQueryId));
     }
 }
 

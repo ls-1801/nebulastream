@@ -79,6 +79,10 @@ public:
     /// @return Handle to the newly allocated buffer
     adaptive_engine::BufferHandle allocate(size_t size) override;
 
+    /// Get the underlying NES buffer provider.
+    /// @return Shared pointer to the underlying AbstractBufferProvider
+    [[nodiscard]] std::shared_ptr<AbstractBufferProvider> getUnderlyingProvider() const { return nesProvider_; }
+
 private:
     std::shared_ptr<AbstractBufferProvider> nesProvider_;
 };

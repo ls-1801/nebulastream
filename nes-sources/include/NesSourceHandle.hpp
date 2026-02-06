@@ -82,7 +82,7 @@ private:
     OriginId originId_;
     std::shared_ptr<AbstractBufferProvider> bufferProvider_;
     std::stop_source stopSource_;
-    std::atomic<uint64_t> sequenceNumber_{0};
+    std::atomic<uint64_t> sequenceNumber_{1};
     bool opened_{false};
 };
 
