@@ -44,6 +44,12 @@ public:
     static constexpr std::string_view NAME = "Checksum";
     explicit ChecksumSink(BackpressureController backpressureController, const SinkDescriptor& sinkDescriptor);
 
+    /// --- adaptive_engine::PipelineStage interface (via NesPipelineStage) ---
+    void start(adaptive_engine::ExecutionContext& ctx) override;
+    void stop(adaptive_engine::ExecutionContext& ctx) override;
+    [[nodiscard]] std::string get_id() const override;
+
+    /// --- Legacy ExecutablePipelineStage interface (to be removed in US-029+) ---
     /// Opens file and writes schema to file, if the file is empty.
     void start(PipelineExecutionContext&) override;
     void stop(PipelineExecutionContext&) override;
@@ -51,6 +57,9 @@ public:
     static DescriptorConfig::Config validateAndFormat(std::unordered_map<std::string, std::string> config);
 
 protected:
+    /// Process a TupleBuffer (new adaptive engine path via NesPipelineStage)
+    void doExecute(adaptive_engine::ExecutionContext& ctx, TupleBuffer& buffer) override;
+
     std::ostream& toString(std::ostream& os) const override { return os << "ChecksumSink"; }
 
 private:

@@ -17,6 +17,8 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <adaptive_engine/ExecutionContext.hpp>
+
 #include <Configurations/Descriptor.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Sinks/SinkDescriptor.hpp>
@@ -45,6 +47,18 @@ void VoidSink::stop(PipelineExecutionContext&)
 void VoidSink::execute([[maybe_unused]] const TupleBuffer& inputTupleBuffer, PipelineExecutionContext&)
 {
     PRECONDITION(inputTupleBuffer, "Invalid input buffer in VoidSink.");
+}
+
+/// --- adaptive_engine::PipelineStage interface (via NesPipelineStage) ---
+
+void VoidSink::doExecute(adaptive_engine::ExecutionContext& /*ctx*/, TupleBuffer& inputTupleBuffer)
+{
+    PRECONDITION(inputTupleBuffer, "Invalid input buffer in VoidSink.");
+}
+
+std::string VoidSink::get_id() const
+{
+    return std::string(NAME);
 }
 
 DescriptorConfig::Config VoidSink::validateAndFormat(std::unordered_map<std::string, std::string> config)

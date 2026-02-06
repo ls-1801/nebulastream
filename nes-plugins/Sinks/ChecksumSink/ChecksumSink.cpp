@@ -22,6 +22,8 @@
 #include <system_error>
 #include <unordered_map>
 #include <utility>
+#include <adaptive_engine/ExecutionContext.hpp>
+
 #include <Configurations/Descriptor.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Sinks/SinkDescriptor.hpp>
@@ -87,6 +89,58 @@ void ChecksumSink::execute(const TupleBuffer& inputBuffer, PipelineExecutionCont
     PRECONDITION(inputBuffer, "Invalid input buffer in ChecksumSink.");
     const std::string formatted = formatter->getFormattedBuffer(inputBuffer);
     checksum.add(formatted);
+}
+
+/// --- adaptive_engine::PipelineStage interface (via NesPipelineStage) ---
+
+void ChecksumSink::start(adaptive_engine::ExecutionContext& /*ctx*/)
+{
+    NES_DEBUG("Setting up checksum sink: {}", *this);
+    if (std::filesystem::exists(outputFilePath.c_str()))
+    {
+        std::error_code ec;
+        if (!std::filesystem::remove(outputFilePath.c_str(), ec))
+        {
+            throw CannotOpenSink("Could not remove existing output file: filePath={} ", outputFilePath);
+        }
+    }
+
+    /// Open the file stream
+    if (!outputFileStream.is_open())
+    {
+        outputFileStream.open(outputFilePath, std::ofstream::binary | std::ofstream::app);
+    }
+    isOpen = outputFileStream.is_open() && outputFileStream.good();
+    if (!isOpen)
+    {
+        throw CannotOpenSink(
+            "Could not open output file; filePathOutput={}, is_open()={}, good={}",
+            outputFilePath,
+            outputFileStream.is_open(),
+            outputFileStream.good());
+    }
+}
+
+void ChecksumSink::doExecute(adaptive_engine::ExecutionContext& /*ctx*/, TupleBuffer& inputBuffer)
+{
+    PRECONDITION(inputBuffer, "Invalid input buffer in ChecksumSink.");
+    const std::string formatted = formatter->getFormattedBuffer(inputBuffer);
+    checksum.add(formatted);
+}
+
+void ChecksumSink::stop(adaptive_engine::ExecutionContext& /*ctx*/)
+{
+    NES_INFO("Checksum Sink completed. Checksum: {}", fmt::streamed(checksum));
+
+    outputFileStream << "S$Count:UINT64,S$Checksum:UINT64" << '\n';
+    outputFileStream << checksum.numberOfTuples << "," << checksum.checksum << '\n';
+    outputFileStream.close();
+    isOpen = false;
+}
+
+std::string ChecksumSink::get_id() const
+{
+    return std::string(NAME);
 }
 
 DescriptorConfig::Config ChecksumSink::validateAndFormat(std::unordered_map<std::string, std::string> config)
