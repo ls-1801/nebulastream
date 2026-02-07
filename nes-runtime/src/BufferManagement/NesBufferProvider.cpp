@@ -16,8 +16,6 @@
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <ErrorHandling.hpp>
 
-#include <cstring>
-
 namespace NES
 {
 
@@ -29,34 +27,6 @@ NesBufferProvider::NesBufferProvider(std::shared_ptr<AbstractBufferProvider> nes
     : nesProvider_(std::move(nesProvider))
 {
     PRECONDITION(nesProvider_ != nullptr, "NesBufferProvider requires a valid AbstractBufferProvider");
-}
-
-adaptive_engine::BufferHandle NesBufferProvider::wrap(void* data, size_t size, const adaptive_engine::BufferMetadata& metadata)
-{
-    PRECONDITION(data != nullptr, "Cannot wrap null data pointer");
-
-    // Allocate a new TupleBuffer and copy the raw data into it.
-    auto handle = allocate(size);
-    if (handle.opaque == nullptr)
-    {
-        return handle; // allocation failed
-    }
-
-    auto* wrapper = static_cast<NesBufferWrapper*>(handle.opaque);
-
-    // Copy data into the TupleBuffer's memory area
-    auto memoryArea = wrapper->buffer.getAvailableMemoryArea<uint8_t>();
-    std::memcpy(memoryArea.data(), data, size);
-
-    // Apply metadata from the Rust side
-    wrapper->buffer.setSequenceNumber(SequenceNumber(metadata.sequence_number));
-    wrapper->buffer.setOriginId(OriginId(metadata.origin_id));
-    wrapper->buffer.setWatermark(Timestamp(metadata.watermark));
-    wrapper->buffer.setNumberOfTuples(metadata.num_tuples);
-    wrapper->buffer.setChunkNumber(ChunkNumber(metadata.chunk_number));
-    wrapper->buffer.setLastChunk(metadata.last_chunk);
-
-    return handle;
 }
 
 void* NesBufferProvider::get_data(adaptive_engine::BufferHandle handle)

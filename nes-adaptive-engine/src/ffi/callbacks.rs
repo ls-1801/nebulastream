@@ -91,19 +91,10 @@ impl Pipeline for CppPipelineStage {
         let result =
             unsafe { stage_execute_with_handle(self.stage_ptr, self.context_ptr, opaque.handle()) };
 
-        // Drop input to release our claim on the handle. The C++ side has its own
-        // reference if needed (emit_buffer clones on C++ side).
-        drop(input);
-
         if result == 0 {
             return Err(PipelineError::ExecutionFailed(
                 "C++ stage execute() failed".to_string(),
             ));
-        }
-
-        // Check if repeat_task was requested during execution
-        if unsafe { stage_get_repeat_requested() } {
-            context.repeat_task(0);
         }
 
         // Collect emitted buffers from C++ thread-local storage.
@@ -120,10 +111,16 @@ impl Pipeline for CppPipelineStage {
             }
         }
 
+        // If repeat was requested, pass the input buffer to the context.
+        // The executor will re-enqueue it as-is (no copy needed).
+        if unsafe { stage_get_repeat_requested() } {
+            context.repeat_task(input, 0);
+        }
+
         Ok(buffers)
     }
 
-    fn flush(&self, context: &dyn PipelineExecutionContext) -> Result<Vec<Buffer>, PipelineError> {
+    fn flush(&self, _context: &dyn PipelineExecutionContext) -> Result<Vec<Buffer>, PipelineError> {
         // Call C++ stage stop() which triggers terminate() on windowed operators,
         // flushing all remaining windows. Collect emitted buffers from TLS just
         // like execute() does.
@@ -135,9 +132,9 @@ impl Pipeline for CppPipelineStage {
                 ));
             }
 
-            // Check if repeat was requested during stop
+            // Check if repeat was requested during stop (handled inline via loop)
             if unsafe { stage_get_repeat_requested() } {
-                context.repeat_task(0);
+                continue;
             } else {
                 break;
             }

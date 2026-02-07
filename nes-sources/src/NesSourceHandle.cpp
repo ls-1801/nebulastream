@@ -40,18 +40,8 @@ namespace
 struct SourceBufferWrapper : adaptive_engine::BufferHandleBase
 {
     TupleBuffer buffer;
-    adaptive_engine::BufferMetadata metadata;
 
-    explicit SourceBufferWrapper(TupleBuffer buf) : buffer(std::move(buf)), metadata{}
-    {
-        // Extract metadata from the TupleBuffer
-        metadata.sequence_number = buffer.getSequenceNumber().getRawValue();
-        metadata.origin_id = buffer.getOriginId().getRawValue();
-        metadata.watermark = buffer.getWatermark().getRawValue();
-        metadata.num_tuples = buffer.getNumberOfTuples();
-        metadata.chunk_number = static_cast<uint32_t>(buffer.getChunkNumber().getRawValue());
-        metadata.last_chunk = buffer.isLastChunk();
-    }
+    explicit SourceBufferWrapper(TupleBuffer buf) : buffer(std::move(buf)) {}
 
     adaptive_engine::BufferHandleBase* do_clone() override { return new SourceBufferWrapper(buffer); }
 };

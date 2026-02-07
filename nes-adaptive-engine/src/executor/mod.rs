@@ -1019,11 +1019,6 @@ impl Executor {
         self.stats_sender
             .task_execution_start(0, query_id, pipeline_id.clone(), task_id);
 
-        // Clone the buffer BEFORE execution for repeat support.
-        // For opaque buffers, clone goes through FFI (buffer_handle_clone).
-        // For owned buffers, clone copies the Vec.
-        let repeat_buffer = buffer.clone();
-
         // Execute the pipeline with context
         match pipeline.execute(buffer, &context) {
             Ok(returned_buffers) => {
@@ -1037,11 +1032,11 @@ impl Executor {
                     task_id,
                 );
 
-                // Check if repeat_task was requested during execution
-                if context.was_repeat_requested() {
+                // Check if repeat_task stored a buffer during execution
+                if let Some(repeat_buffer) = context.take_repeat_buffer() {
                     let delay_ms = context.get_repeat_delay_ms();
 
-                    // Create the repeat task with the correct query_id
+                    // Re-enqueue the buffer as-is (no copy, no modification)
                     let repeat_task = Task::WorkTask {
                         query_id,
                         pipeline_id: pipeline_id.clone(),

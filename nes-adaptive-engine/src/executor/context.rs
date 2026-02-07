@@ -6,9 +6,9 @@
 
 use crate::ffi::QueryId;
 use crate::pipeline::{Buffer, PipelineError, PipelineId};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
+use std::sync::Mutex;
 
 /// Execution context provided to pipelines during execution.
 ///
@@ -60,29 +60,27 @@ pub trait PipelineExecutionContext: Send + Sync {
     /// Get the current pipeline ID.
     fn get_pipeline_id(&self) -> &PipelineId;
 
-    /// Request re-execution of the current task after a delay.
+    /// Request re-execution of the current task with the given buffer.
     ///
-    /// Sets a flag that the executor checks after `pipeline.execute()` returns.
-    /// The executor handles re-queueing with the correct buffer, query_id, and
-    /// pending counter management.
+    /// The caller provides the buffer to re-execute with. The executor
+    /// re-enqueues this buffer as-is without copying or modifying it.
     ///
     /// # Arguments
     ///
+    /// * `buffer` - The buffer to re-execute with.
     /// * `delay_ms` - The delay in milliseconds before re-queuing the task.
     ///   If 0, the task is re-queued immediately.
-    fn repeat_task(&self, delay_ms: u64);
+    fn repeat_task(&self, buffer: Buffer, delay_ms: u64);
 }
 
 /// Default execution context implementation backed by the executor.
 ///
 /// # Repeat Task Mechanism
 ///
-/// When `repeat_task(delay_ms)` is called during pipeline execution, the context
-/// sets a flag and stores the delay value. After `pipeline.execute()` returns,
-/// `execute_work_task()` in the executor checks this flag. If set, the executor:
-/// 1. Creates a new buffer with incremented watermark (used as repeat counter)
-/// 2. Increments the pending task counter
-/// 3. Enqueues a new WorkTask with the correct query_id
+/// When `repeat_task(buffer, delay_ms)` is called during pipeline execution,
+/// the context stores the buffer and delay value. After `pipeline.execute()`
+/// returns, `execute_work_task()` in the executor takes the stored buffer
+/// and re-enqueues it as-is.
 ///
 /// # Thread Safety
 ///
@@ -90,7 +88,7 @@ pub trait PipelineExecutionContext: Send + Sync {
 /// - `pipeline_id` is immutable after creation
 /// - `worker_id` and `worker_count` are immutable
 /// - `emit_tx` is a `Sender` which is `Send + Sync`
-/// - `repeat_requested` and `repeat_delay_ms` are atomics
+/// - `repeat_buffer` is behind a Mutex, `repeat_delay_ms` is atomic
 pub struct ExecutorContext {
     /// The ID of the pipeline being executed
     pipeline_id: PipelineId,
@@ -108,11 +106,11 @@ pub struct ExecutorContext {
     /// Channel for emitting buffers to the executor
     emit_tx: Sender<(PipelineId, Buffer)>,
 
-    /// Flag indicating that repeat_task was called during execution.
-    repeat_requested: Arc<AtomicBool>,
+    /// Buffer to re-enqueue, set by repeat_task during execution.
+    repeat_buffer: Mutex<Option<Buffer>>,
 
     /// Delay value set by repeat_task (in milliseconds).
-    repeat_delay_ms: Arc<AtomicU64>,
+    repeat_delay_ms: AtomicU64,
 }
 
 impl ExecutorContext {
@@ -129,8 +127,8 @@ impl ExecutorContext {
             worker_id,
             worker_count,
             emit_tx,
-            repeat_requested: Arc::new(AtomicBool::new(false)),
-            repeat_delay_ms: Arc::new(AtomicU64::new(0)),
+            repeat_buffer: Mutex::new(None),
+            repeat_delay_ms: AtomicU64::new(0),
         }
     }
 
@@ -148,14 +146,14 @@ impl ExecutorContext {
             worker_id,
             worker_count,
             emit_tx,
-            repeat_requested: Arc::new(AtomicBool::new(false)),
-            repeat_delay_ms: Arc::new(AtomicU64::new(0)),
+            repeat_buffer: Mutex::new(None),
+            repeat_delay_ms: AtomicU64::new(0),
         }
     }
 
-    /// Check if repeat_task was called during execution.
-    pub fn was_repeat_requested(&self) -> bool {
-        self.repeat_requested.load(Ordering::SeqCst)
+    /// Take the repeat buffer, if one was stored by repeat_task.
+    pub fn take_repeat_buffer(&self) -> Option<Buffer> {
+        self.repeat_buffer.lock().unwrap().take()
     }
 
     /// Get the delay value set by repeat_task.
@@ -187,11 +185,11 @@ impl PipelineExecutionContext for ExecutorContext {
         &self.pipeline_id
     }
 
-    fn repeat_task(&self, delay_ms: u64) {
-        // Set the repeat flag and delay value.
-        // The executor will check this flag after pipeline.execute() returns
-        // and handle re-queueing with the correct buffer, query_id, and pending counter.
-        self.repeat_requested.store(true, Ordering::SeqCst);
+    fn repeat_task(&self, buffer: Buffer, delay_ms: u64) {
+        // Store the buffer and delay value.
+        // The executor will take the buffer after pipeline.execute() returns
+        // and re-enqueue it as-is.
+        *self.repeat_buffer.lock().unwrap() = Some(buffer);
         self.repeat_delay_ms.store(delay_ms, Ordering::SeqCst);
     }
 }

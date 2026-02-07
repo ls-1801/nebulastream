@@ -65,9 +65,9 @@ public:
     /// @param handle The buffer to emit
     void emit_buffer(adaptive_engine::BufferHandle handle) override;
 
-    /// Request that this task be repeated after the current execution.
+    /// Request that this task be repeated with the given buffer.
     /// Used for sources that have more data to produce.
-    void repeat_task() override;
+    void repeat_task(adaptive_engine::BufferHandle handle) override;
 
     /// Get the worker ID executing this context.
     /// @return Worker identifier (0-based)

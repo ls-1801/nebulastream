@@ -45,13 +45,15 @@ void NesExecutionContext::emit_buffer(adaptive_engine::BufferHandle handle)
     // This may happen during testing or when there are no successors.
 }
 
-void NesExecutionContext::repeat_task()
+void NesExecutionContext::repeat_task(adaptive_engine::BufferHandle /*handle*/)
 {
     if (repeatCallback_)
     {
         repeatCallback_();
     }
     // If no callback is set, the repeat request is silently ignored.
+    // The handle is not used here — the Rust FFI bridge preserves the
+    // original buffer and passes it to the executor for re-enqueuing.
 }
 
 uint32_t NesExecutionContext::get_worker_id() const

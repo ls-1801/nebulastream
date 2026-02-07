@@ -50,13 +50,6 @@ public:
 
     ~NesBufferProvider() = default;
 
-    /// Wrap raw data into a new buffer by copying it into a TupleBuffer.
-    /// @param data Pointer to raw buffer data
-    /// @param size Size of the data in bytes
-    /// @param metadata Metadata to associate with the buffer
-    /// @return Handle to the wrapped buffer
-    adaptive_engine::BufferHandle wrap(void* data, size_t size, const adaptive_engine::BufferMetadata& metadata);
-
     /// Get the data pointer for a buffer.
     /// @param handle The buffer handle
     /// @return Pointer to the TupleBuffer's data region

@@ -11,17 +11,28 @@
 
 namespace adaptive_engine::test {
 
+/// Test-only metadata for buffer tracking in test assertions.
+/// This is NOT part of the adaptive engine public API.
+struct TestBufferMetadata {
+    uint64_t sequence_number{0};
+    uint64_t origin_id{0};
+    uint64_t watermark{0};
+    uint64_t num_tuples{0};
+    uint32_t chunk_number{0};
+    bool last_chunk{false};
+};
+
 /// Test buffer implementation for C++ tests without NES dependencies.
 /// Inherits BufferHandleBase for provider-free clone/release via virtual dispatch.
 struct TestBuffer : BufferHandleBase {
     std::vector<uint8_t> data;
-    BufferMetadata metadata;
+    TestBufferMetadata metadata;
     std::atomic<int> ref_count{1};
 
-    TestBuffer(size_t size, const BufferMetadata& meta)
+    TestBuffer(size_t size, const TestBufferMetadata& meta)
         : data(size), metadata(meta) {}
 
-    TestBuffer(const void* src, size_t size, const BufferMetadata& meta)
+    TestBuffer(const void* src, size_t size, const TestBufferMetadata& meta)
         : data(size), metadata(meta) {
         if (src != nullptr && size > 0) {
             std::memcpy(data.data(), src, size);
@@ -50,7 +61,7 @@ public:
 
     /// Wrap an existing buffer with the provider.
     /// Creates a copy of the data for test isolation.
-    BufferHandle wrap(void* data, size_t size, const BufferMetadata& metadata) {
+    BufferHandle wrap(void* data, size_t size, const TestBufferMetadata& metadata) {
         auto* buffer = new TestBuffer(data, size, metadata);
         BufferHandle handle{buffer};
 
@@ -74,7 +85,7 @@ public:
 
     /// Allocate a new buffer of the specified size.
     BufferHandle allocate(size_t size) {
-        BufferMetadata empty_metadata{0, 0, 0, 0, 0, false};
+        TestBufferMetadata empty_metadata{};
         auto* buffer = new TestBuffer(size, empty_metadata);
         BufferHandle handle{buffer};
 

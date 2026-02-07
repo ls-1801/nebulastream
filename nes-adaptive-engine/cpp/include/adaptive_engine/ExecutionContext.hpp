@@ -18,9 +18,10 @@ public:
     /// @param handle The buffer to emit
     virtual void emit_buffer(BufferHandle handle) = 0;
 
-    /// Request that this task be repeated after the current execution
-    /// Used for sources that have more data to produce
-    virtual void repeat_task() = 0;
+    /// Request that this task be repeated with the given buffer.
+    /// The engine re-enqueues the buffer as-is without copying or modifying it.
+    /// @param handle The buffer to re-execute with
+    virtual void repeat_task(BufferHandle handle) = 0;
 
     /// Get the worker ID executing this context
     /// @return Worker identifier (0-based)

@@ -47,7 +47,9 @@ public:
         g_emitted_buffer_data.push_back(ebd);
     }
 
-    void repeat_task() override {
+    void repeat_task(adaptive_engine::BufferHandle /*handle*/) override {
+        // The handle is not stored on the C++ side. The Rust FFI bridge
+        // preserves the original buffer and passes it to the executor.
         g_repeat_requested = true;
     }
 

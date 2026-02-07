@@ -229,7 +229,7 @@ public:
             void* buf_addr = static_cast<void*>(input.opaque);
             uint64_t current_repeat = controller_->get_and_increment_repeat(buf_addr);
             if (current_repeat < max_repeats) {
-                ctx.repeat_task();
+                ctx.repeat_task(input);
                 return;
             }
         }
@@ -262,8 +262,8 @@ public:
                 // Already set, ignore
             }
         } else if (stop_calls < repeats_during_stop) {
-            // Request another stop via repeat_task
-            ctx.repeat_task();
+            // Request another stop via repeat_task (no buffer during stop)
+            ctx.repeat_task(BufferHandle{nullptr});
         }
         // If stop_calls > repeats_during_stop, we've been called too many times
         // but we don't throw here to avoid masking other errors

@@ -3,6 +3,7 @@
 #include <adaptive_engine/Buffer.hpp>
 #include <adaptive_engine/ExecutionContext.hpp>
 #include <adaptive_engine/SourceHandle.hpp>
+#include "TestBuffer.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -70,7 +71,7 @@ public:
     /// @param data Raw buffer data to inject
     /// @param metadata Buffer metadata
     /// @return true if data was successfully queued, false if source is already closed
-    bool inject_data_with_metadata(std::vector<uint8_t> data, const BufferMetadata& metadata) {
+    bool inject_data_with_metadata(std::vector<uint8_t> data, const TestBufferMetadata& metadata) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (closed_) {
             return false;
@@ -190,7 +191,7 @@ private:
 
     struct DataWithMetadata {
         std::vector<uint8_t> data;
-        BufferMetadata metadata;
+        TestBufferMetadata metadata;
     };
 
     struct Error {
@@ -309,8 +310,8 @@ public:
                     controller_->failed_ = true;
                     throw std::runtime_error(arg.message);
                 } else if constexpr (std::is_same_v<T, TestSourceController::Data>) {
-                    // BufferMetadata field order: sequence_number, origin_id, watermark, num_tuples, chunk_number, last_chunk
-                    BufferMetadata metadata{
+                    // TestBufferMetadata field order: sequence_number, origin_id, watermark, num_tuples, chunk_number, last_chunk
+                    TestBufferMetadata metadata{
                         arg.sequence_number,  // sequence_number
                         0,                    // origin_id (can be set by test)
                         0,                    // watermark

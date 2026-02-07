@@ -67,7 +67,8 @@ public:
 
     void repeatTask(const TupleBuffer& /*buffer*/, std::chrono::milliseconds /*delay*/) override
     {
-        adaptiveCtx_.repeat_task();
+        // Pass a null handle — the Rust side preserves the original buffer.
+        adaptiveCtx_.repeat_task(adaptive_engine::BufferHandle{nullptr});
     }
 
     TupleBuffer allocateTupleBuffer() override
