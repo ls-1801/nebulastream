@@ -20,6 +20,7 @@
 #include <utility>
 #include <adaptive_engine/Buffer.hpp>
 #include <adaptive_engine/ExecutionContext.hpp>
+#include <BufferManagement/NesBufferProvider.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Time/Timestamp.hpp>
@@ -30,23 +31,6 @@
 namespace NES
 {
 
-namespace
-{
-
-/// Internal wrapper that holds a TupleBuffer and its cached metadata for the adaptive engine.
-/// This is allocated on the heap and stored as the opaque pointer in BufferHandle.
-/// Note: This mirrors NesBufferWrapper in nes-runtime but is defined locally to avoid
-/// a circular dependency between nes-sources and nes-runtime.
-struct SourceBufferWrapper : adaptive_engine::BufferHandleBase
-{
-    TupleBuffer buffer;
-
-    explicit SourceBufferWrapper(TupleBuffer buf) : buffer(std::move(buf)) {}
-
-    adaptive_engine::BufferHandleBase* do_clone() override { return new SourceBufferWrapper(buffer); }
-};
-
-}  // namespace
 
 NesSourceHandle::NesSourceHandle(
     std::unique_ptr<Source> source,
@@ -110,8 +94,7 @@ std::optional<adaptive_engine::BufferHandle> NesSourceHandle::next_buffer(adapti
     buffer->setNumberOfTuples(result.getNumberOfBytes());
 
     // Wrap the TupleBuffer into a BufferHandle
-    // Create a SourceBufferWrapper on the heap (follows same pattern as NesBufferWrapper)
-    auto* wrapper = new SourceBufferWrapper(std::move(*buffer));
+    auto* wrapper = new NesBufferWrapper(std::move(*buffer));
 
     return adaptive_engine::BufferHandle{wrapper};
 }

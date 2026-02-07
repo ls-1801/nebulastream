@@ -10,8 +10,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(BufferManagement)
-add_subdirectory(Execution)
 add_subdirectory(Runtime)
 add_subdirectory(Pipelines)
 add_subdirectory(Listeners)

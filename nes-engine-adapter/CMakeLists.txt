@@ -10,6 +10,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_source_files(nes-runtime
-        NesExecutionContext.cpp
-)
+add_subdirectory(src)
+get_source(nes-engine-adapter NES_ENGINE_ADAPTER_SOURCE_FILES)
+
+add_library(nes-engine-adapter ${NES_ENGINE_ADAPTER_SOURCE_FILES})
+target_link_libraries(nes-engine-adapter PUBLIC nes-common nes-memory adaptive_engine)
+
+target_include_directories(nes-engine-adapter PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include/nebulastream/>)
+
+if (NES_ENABLE_PRECOMPILED_HEADERS)
+    target_precompile_headers(nes-engine-adapter REUSE_FROM nes-common)
+endif ()
