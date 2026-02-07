@@ -46,7 +46,7 @@ run_step "cargo test" cargo test --manifest-path nes-adaptive-engine/Cargo.toml
 
 # --- NES build + tests ---
 run_step "NES configure" cmake --preset debug
-run_step "NES build (systest target)" cmake --build --preset debug --target systest -j$(nproc)
+run_step "NES build" cmake --build --preset debug --target systest --target QueryEngineTest -j$(nproc)
 
 # Run NES QueryEngineTest
 run_step "QueryEngineTest (NES)" timeout 120 ctest --test-dir "$SCRIPT_DIR/build-debug" -R QueryEngineTest --output-on-failure --timeout 30

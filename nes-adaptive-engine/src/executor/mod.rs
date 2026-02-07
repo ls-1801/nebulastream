@@ -963,9 +963,11 @@ impl Executor {
         // Read-lock the queries and find the graph for this query
         let queries_guard = self.queries.read().unwrap();
 
-        // Look up by query_id, or fall back to first query if query_id is 0 (backward compat)
+        // Look up by query_id, or search for the query owning this pipeline if query_id is 0
         let query_state = if query_id == 0 {
-            queries_guard.values().next()
+            queries_guard
+                .values()
+                .find(|qs| qs.graph.get_pipeline(pipeline_id).is_some())
         } else {
             queries_guard.get(&query_id)
         };
@@ -1413,7 +1415,7 @@ impl Executor {
         }
 
         // 2. Call flush() to get final buffers
-        let flushed_buffers: Vec<Buffer> = {
+        let flush_result: Result<Vec<Buffer>, String> = {
             let queries_guard = self.queries.read().unwrap();
 
             // Find graph containing this pipeline
@@ -1431,30 +1433,59 @@ impl Executor {
                     let (emit_tx, emit_rx) = channel();
                     let context = context::ExecutorContext::new(pipeline_id.clone(), 0, 1, emit_tx);
 
-                    let returned_buffers = pipeline.flush(&context).unwrap_or_else(|e| {
-                        eprintln!("Error during flush for {}: {}", pipeline_id, e);
-                        stats.errors_encountered += 1;
-                        vec![]
-                    });
+                    match pipeline.flush(&context) {
+                        Ok(returned_buffers) => {
+                            // Collect emitted buffers from context
+                            let mut emitted_buffers = Vec::new();
+                            while let Ok((_pid, buf)) = emit_rx.try_recv() {
+                                emitted_buffers.push(buf);
+                            }
 
-                    // Collect emitted buffers from context
-                    let mut emitted_buffers = Vec::new();
-                    while let Ok((_pid, buf)) = emit_rx.try_recv() {
-                        emitted_buffers.push(buf);
+                            // Combine returned and emitted buffers
+                            Ok(returned_buffers
+                                .into_iter()
+                                .chain(emitted_buffers)
+                                .collect())
+                        }
+                        Err(e) => Err(e.to_string()),
                     }
-
-                    // Combine returned and emitted buffers
-                    returned_buffers
-                        .into_iter()
-                        .chain(emitted_buffers)
-                        .collect()
                 } else {
-                    vec![]
+                    Ok(vec![])
                 }
             } else {
-                vec![]
+                Ok(vec![])
             }
         };
+
+        // If flush failed, terminate the query immediately
+        if let Err(e) = &flush_result {
+            eprintln!("Error during flush for {}: {}", pipeline_id, e);
+
+            // Record error in per-query error state
+            {
+                let queries_guard = self.queries.read().unwrap();
+                if let Some(qs) = queries_guard.get(&query_id) {
+                    qs.error_state.record_error(ExecutionError {
+                        entity_id: pipeline_id.clone(),
+                        entity_type: EntityType::Pipeline,
+                        error: e.clone(),
+                        task_type: TaskType::StopPipeline,
+                    });
+                }
+            }
+
+            stats.errors_encountered += 1;
+
+            // Remove this pipeline's metadata
+            self.metadata.lock().unwrap().remove(pipeline_id);
+            stats.pipelines_stopped += 1;
+
+            // Terminate the entire query - remaining pipelines are just dropped
+            self.terminate_query(query_id, stats);
+            return;
+        }
+
+        let flushed_buffers = flush_result.unwrap();
 
         // 3. Route flushed buffers to successors
         if !flushed_buffers.is_empty() {
