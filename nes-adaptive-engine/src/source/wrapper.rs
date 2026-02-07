@@ -190,8 +190,6 @@ impl Pipeline for SourcePipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sequence::SequenceNumber;
-
     struct MockSource {
         id: PipelineId,
     }
@@ -279,7 +277,7 @@ mod tests {
 
         let (tx, _rx) = channel();
         let context = ExecutorContext::new(PipelineId::new("test"), 0, 1, tx);
-        let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+        let buffer = Buffer::new(vec![1, 2, 3]);
         let _ = wrapper.execute(buffer, &context); // Should panic
     }
 

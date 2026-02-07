@@ -46,7 +46,7 @@ build-debug/nes-systests/systest/systest --sequential \
 
 ## Quality Gate
 
-Run `./quality_gate.sh` to execute all quality checks. It runs Rust checks, the NES build, QueryEngineTest, and systests.
+Run `./quality_gate.sh` to execute all quality checks. It runs Rust checks (including unit tests), the NES build, QueryEngineTest, and systests.
 
 ## Adaptive Engine (Rust)
 
@@ -56,6 +56,9 @@ The adaptive engine Rust code can be checked independently for faster iteration:
 cargo check --manifest-path nes-adaptive-engine/Cargo.toml
 cargo clippy --manifest-path nes-adaptive-engine/Cargo.toml -- -D warnings
 cargo fmt --manifest-path nes-adaptive-engine/Cargo.toml --check
+cargo test --manifest-path nes-adaptive-engine/Cargo.toml
 ```
+
+This runs all Rust tests: library unit tests, integration tests, and doc-tests.
 
 The C++ tests (QueryEngineTest) are built as part of the NES root CMake system.

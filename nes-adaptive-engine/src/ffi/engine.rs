@@ -5,9 +5,13 @@
 
 use crate::executor::stats::{StatisticsEvent, StatisticsSender};
 use crate::executor::{Executor, ExecutorHandle};
+#[cfg(feature = "cpp-ffi")]
 use crate::ffi::callbacks::{CppPipelineStage, CppSourceAdapter, CppSourceHandle};
+#[cfg(feature = "cpp-ffi")]
 use crate::graph::PipelineGraph;
+#[cfg(feature = "cpp-ffi")]
 use crate::pipeline::PipelineId;
+#[cfg(feature = "cpp-ffi")]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -17,6 +21,7 @@ use std::thread::{self, JoinHandle};
 pub type QueryId = u64;
 
 /// Global counter for generating unique query IDs.
+#[cfg(feature = "cpp-ffi")]
 static NEXT_QUERY_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Opaque handle to the Rust execution engine.
@@ -26,8 +31,8 @@ static NEXT_QUERY_ID: AtomicU64 = AtomicU64::new(1);
 pub struct EngineHandle {
     /// Handle for submitting tasks to the executor (updated on each start)
     executor_handle: Arc<Mutex<Option<ExecutorHandle>>>,
-    /// Pointer to C++ BufferProvider (for buffer operations)
-    buffer_provider_ptr: usize,
+    /// Opaque context pointer (e.g., NesBufferProvider*)
+    context_ptr: usize,
     /// The executor instance (Some before start, None after start)
     executor: Arc<Mutex<Option<Executor>>>,
     /// Thread handle for the executor (Some when running)
@@ -38,7 +43,7 @@ pub struct EngineHandle {
 
 // SAFETY: EngineHandle is Send because:
 // - ExecutorHandle is Clone and thread-safe
-// - buffer_provider_ptr is just a usize
+// - context_ptr is just a usize
 // - executor, executor_thread and last_stats use Arc<Mutex>
 unsafe impl Send for EngineHandle {}
 
@@ -51,18 +56,18 @@ impl EngineHandle {
     /// Create a new engine handle.
     ///
     /// # Arguments
-    /// * `buffer_provider_ptr` - Opaque pointer to C++ BufferProvider
+    /// * `context_ptr` - Opaque context pointer
     ///
     /// # Returns
     /// A new EngineHandle ready to be started
-    pub fn new(buffer_provider_ptr: usize) -> Self {
+    pub fn new(context_ptr: usize) -> Self {
         // Create executor and get handle before storing
         let executor = Executor::new();
         let handle = executor.get_handle();
 
         Self {
             executor_handle: Arc::new(Mutex::new(Some(handle))),
-            buffer_provider_ptr,
+            context_ptr,
             executor: Arc::new(Mutex::new(Some(executor))),
             executor_thread: Arc::new(Mutex::new(None)),
             last_stats: Arc::new(Mutex::new(None)),
@@ -72,7 +77,7 @@ impl EngineHandle {
     /// Create a new engine handle with statistics collection enabled.
     ///
     /// Returns both the engine handle and a stats queue for polling events.
-    pub fn new_with_stats(buffer_provider_ptr: usize) -> (Self, StatsQueueHandle) {
+    pub fn new_with_stats(context_ptr: usize) -> (Self, StatsQueueHandle) {
         let (tx, rx) = mpsc::channel::<StatisticsEvent>();
         let sender = StatisticsSender::new(tx);
         let executor = Executor::with_queue_and_stats(crate::executor::FifoQueue::new(), sender);
@@ -80,7 +85,7 @@ impl EngineHandle {
 
         let engine = Self {
             executor_handle: Arc::new(Mutex::new(Some(handle))),
-            buffer_provider_ptr,
+            context_ptr,
             executor: Arc::new(Mutex::new(Some(executor))),
             executor_thread: Arc::new(Mutex::new(None)),
             last_stats: Arc::new(Mutex::new(None)),
@@ -153,8 +158,8 @@ impl EngineHandle {
     }
 
     /// Get the buffer provider pointer.
-    pub fn buffer_provider_ptr(&self) -> usize {
-        self.buffer_provider_ptr
+    pub fn context_ptr(&self) -> usize {
+        self.context_ptr
     }
 
     /// Get a clone of the executor handle for submitting tasks.
@@ -192,6 +197,7 @@ impl EngineHandle {
 /// This type is exported to C++ via FFI and provides polling access to
 /// the statistics event channel.
 pub struct StatsQueueHandle {
+    #[cfg_attr(not(feature = "cpp-ffi"), allow(dead_code))]
     receiver: Mutex<mpsc::Receiver<StatisticsEvent>>,
 }
 
@@ -200,6 +206,7 @@ unsafe impl Send for StatsQueueHandle {}
 unsafe impl Sync for StatsQueueHandle {}
 
 /// C-compatible statistics event type tag.
+#[cfg(feature = "cpp-ffi")]
 #[repr(u32)]
 pub enum FfiStatisticsEventType {
     None = 0,
@@ -218,6 +225,7 @@ pub enum FfiStatisticsEventType {
 ///
 /// All events share the same flat struct. Fields that don't apply to a
 /// particular event type are set to 0/empty.
+#[cfg(feature = "cpp-ffi")]
 #[repr(C)]
 pub struct FfiStatisticsEvent {
     pub event_type: u32,
@@ -230,6 +238,7 @@ pub struct FfiStatisticsEvent {
     pub task_id: u64,
 }
 
+#[cfg(feature = "cpp-ffi")]
 impl Default for FfiStatisticsEvent {
     fn default() -> Self {
         Self {
@@ -250,12 +259,12 @@ impl Default for FfiStatisticsEvent {
 /// Create a new engine instance.
 ///
 /// # Arguments
-/// * `buffer_provider_ptr` - Opaque pointer to C++ BufferProvider
+/// * `context_ptr` - Opaque context pointer
 ///
 /// # Returns
 /// Box containing the new EngineHandle
-pub fn engine_create(buffer_provider_ptr: usize) -> Box<EngineHandle> {
-    Box::new(EngineHandle::new(buffer_provider_ptr))
+pub fn engine_create(context_ptr: usize) -> Box<EngineHandle> {
+    Box::new(EngineHandle::new(context_ptr))
 }
 
 /// Start the engine's worker threads.
@@ -306,6 +315,7 @@ pub fn engine_get_stats(engine: &EngineHandle) -> super::ffi::FfiExecutionStats 
 /// - All stage_ptrs are valid C++ PipelineStage pointers
 /// - All source_ptrs are valid C++ SourceHandle pointers
 /// - All edge indices are within bounds
+#[cfg(feature = "cpp-ffi")]
 pub fn engine_submit_query(
     engine: &EngineHandle,
     stage_ptrs: &[usize],
@@ -319,12 +329,12 @@ pub fn engine_submit_query(
 
     // Build a pipeline graph from the C++ stage pointers
     let mut graph = PipelineGraph::new();
-    let buffer_provider_ptr = engine.buffer_provider_ptr();
+    let context_ptr = engine.context_ptr();
 
     // Add each stage as a pipeline
     for (idx, &stage_ptr) in stage_ptrs.iter().enumerate() {
         let pipeline_id = PipelineId::new(format!("query-{}-stage-{}", query_id, idx));
-        let stage = unsafe { CppPipelineStage::new(pipeline_id, stage_ptr, buffer_provider_ptr) };
+        let stage = unsafe { CppPipelineStage::new(pipeline_id, stage_ptr, context_ptr) };
         if let Err(e) = graph.add_pipeline(Box::new(stage)) {
             eprintln!("Error adding pipeline for query {}: {}", query_id, e);
             return 0;
@@ -334,8 +344,7 @@ pub fn engine_submit_query(
     // Add each source as a CppSourceAdapter
     for (idx, &source_ptr) in source_ptrs.iter().enumerate() {
         let source_id = PipelineId::new(format!("query-{}-source-{}", query_id, idx));
-        let source_handle =
-            unsafe { CppSourceHandle::new(source_id, source_ptr, buffer_provider_ptr) };
+        let source_handle = unsafe { CppSourceHandle::new(source_id, source_ptr, context_ptr) };
         let source_adapter = Arc::new(CppSourceAdapter::new(source_handle));
         if let Err(e) = graph.add_source(source_adapter) {
             eprintln!("Error adding source for query {}: {}", query_id, e);
@@ -430,15 +439,17 @@ pub fn engine_stop_query(engine: &EngineHandle, query_id: QueryId) -> bool {
 ///
 /// # Safety
 /// The caller must ensure the returned pointer is eventually freed with `engine_destroy`.
+#[cfg(feature = "cpp-ffi")]
 #[no_mangle]
-pub extern "C" fn engine_create_ffi(buffer_provider_ptr: usize) -> *mut EngineHandle {
-    Box::into_raw(Box::new(EngineHandle::new(buffer_provider_ptr)))
+pub extern "C" fn engine_create_ffi(context_ptr: usize) -> *mut EngineHandle {
+    Box::into_raw(Box::new(EngineHandle::new(context_ptr)))
 }
 
 /// Start the engine's worker threads (C FFI).
 ///
 /// # Safety
 /// The caller must ensure `engine` is a valid pointer returned by `engine_create_ffi`.
+#[cfg(feature = "cpp-ffi")]
 #[no_mangle]
 pub unsafe extern "C" fn engine_start_ffi(engine: *const EngineHandle) {
     if let Some(engine) = unsafe { engine.as_ref() } {
@@ -450,6 +461,7 @@ pub unsafe extern "C" fn engine_start_ffi(engine: *const EngineHandle) {
 ///
 /// # Safety
 /// The caller must ensure `engine` is a valid pointer returned by `engine_create_ffi`.
+#[cfg(feature = "cpp-ffi")]
 #[no_mangle]
 pub unsafe extern "C" fn engine_shutdown_ffi(engine: *const EngineHandle) {
     if let Some(engine) = unsafe { engine.as_ref() } {
@@ -463,6 +475,7 @@ pub unsafe extern "C" fn engine_shutdown_ffi(engine: *const EngineHandle) {
 /// The caller must ensure:
 /// - `engine` is a valid pointer returned by `engine_create_ffi`
 /// - All out pointers are valid and aligned
+#[cfg(feature = "cpp-ffi")]
 #[no_mangle]
 pub unsafe extern "C" fn engine_get_stats_raw(
     engine: *const EngineHandle,
@@ -502,6 +515,7 @@ pub unsafe extern "C" fn engine_get_stats_raw(
 /// - `engine` is a valid pointer returned by `engine_create_ffi`
 /// - All array pointers are valid for their respective lengths
 /// - All stage/source pointers in the arrays are valid C++ objects
+#[cfg(feature = "cpp-ffi")]
 #[no_mangle]
 pub unsafe extern "C" fn engine_submit_query_raw(
     engine: *const EngineHandle,
@@ -573,6 +587,7 @@ pub unsafe extern "C" fn engine_submit_query_raw(
 ///
 /// # Safety
 /// The caller must ensure `engine` is a valid pointer returned by `engine_create_ffi`.
+#[cfg(feature = "cpp-ffi")]
 #[no_mangle]
 pub unsafe extern "C" fn engine_stop_query_ffi(
     engine: *const EngineHandle,
@@ -590,6 +605,7 @@ pub unsafe extern "C" fn engine_stop_query_ffi(
 /// # Safety
 /// The caller must ensure `engine` is a valid pointer returned by `engine_create_ffi`
 /// and that it hasn't already been freed.
+#[cfg(feature = "cpp-ffi")]
 #[no_mangle]
 pub unsafe extern "C" fn engine_destroy(engine: *mut EngineHandle) {
     if !engine.is_null() {
@@ -608,12 +624,13 @@ pub unsafe extern "C" fn engine_destroy(engine: *mut EngineHandle) {
 /// # Safety
 /// The caller must ensure out_engine and out_stats are valid pointers.
 /// The returned pointers must be freed with `engine_destroy` and `stats_queue_destroy`.
+#[cfg(feature = "cpp-ffi")]
 #[no_mangle]
 pub unsafe extern "C" fn engine_create_with_stats_ffi(
-    buffer_provider_ptr: usize,
+    context_ptr: usize,
     out_stats: *mut *mut StatsQueueHandle,
 ) -> *mut EngineHandle {
-    let (engine, stats) = EngineHandle::new_with_stats(buffer_provider_ptr);
+    let (engine, stats) = EngineHandle::new_with_stats(context_ptr);
 
     if !out_stats.is_null() {
         unsafe { *out_stats = Box::into_raw(Box::new(stats)) };
@@ -637,6 +654,7 @@ pub unsafe extern "C" fn engine_create_with_stats_ffi(
 ///
 /// # Safety
 /// The caller must ensure `stats` is a valid pointer and `out_event` is valid.
+#[cfg(feature = "cpp-ffi")]
 #[no_mangle]
 pub unsafe extern "C" fn engine_poll_event_ffi(
     stats: *const StatsQueueHandle,
@@ -805,6 +823,7 @@ pub unsafe extern "C" fn engine_poll_event_ffi(
 /// # Safety
 /// The caller must ensure `stats` is a valid pointer returned by
 /// `engine_create_with_stats_ffi` and that it hasn't already been freed.
+#[cfg(feature = "cpp-ffi")]
 #[no_mangle]
 pub unsafe extern "C" fn stats_queue_destroy(stats: *mut StatsQueueHandle) {
     if !stats.is_null() {
@@ -819,7 +838,7 @@ mod tests {
     #[test]
     fn test_engine_create() {
         let engine = engine_create(0);
-        assert_eq!(engine.buffer_provider_ptr(), 0);
+        assert_eq!(engine.context_ptr(), 0);
     }
 
     #[test]
@@ -830,6 +849,7 @@ mod tests {
         assert_eq!(stats.tasks_executed, 0);
     }
 
+    #[cfg(feature = "cpp-ffi")]
     #[test]
     fn test_engine_submit_query_empty() {
         let engine = engine_create(0);
@@ -841,6 +861,7 @@ mod tests {
         assert!(query_id > 0);
     }
 
+    #[cfg(feature = "cpp-ffi")]
     #[test]
     fn test_engine_submit_query_unique_ids() {
         let engine = engine_create(0);
@@ -858,6 +879,7 @@ mod tests {
         assert_ne!(id1, id3);
     }
 
+    #[cfg(feature = "cpp-ffi")]
     #[test]
     fn test_ffi_engine_lifecycle() {
         // Test the raw C FFI functions
@@ -866,7 +888,7 @@ mod tests {
             assert!(!engine.is_null());
 
             // Check buffer provider was stored
-            assert_eq!((*engine).buffer_provider_ptr(), 12345);
+            assert_eq!((*engine).context_ptr(), 12345);
 
             // Get stats (should be empty)
             let mut buffers: u64 = 0;

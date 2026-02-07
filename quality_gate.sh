@@ -42,6 +42,7 @@ run_systest() {
 run_step "cargo check" cargo check --manifest-path nes-adaptive-engine/Cargo.toml
 run_step "cargo clippy" cargo clippy --manifest-path nes-adaptive-engine/Cargo.toml -- -D warnings
 run_step "cargo fmt" cargo fmt --manifest-path nes-adaptive-engine/Cargo.toml --check
+run_step "cargo test" cargo test --manifest-path nes-adaptive-engine/Cargo.toml
 
 # --- NES build + tests ---
 run_step "NES configure" cmake --preset debug

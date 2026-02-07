@@ -9,7 +9,6 @@
 //! ```
 //! use adaptive_engine::pipeline::mocks::{FilterPipeline, MultibufferPipeline};
 //! use adaptive_engine::pipeline::{Pipeline, Buffer, PipelineId};
-//! use adaptive_engine::sequence::SequenceNumber;
 //!
 //! // Create a filter pipeline that only passes buffers longer than 10 bytes
 //! let filter = FilterPipeline::new(
@@ -36,7 +35,6 @@ use std::sync::Mutex;
 /// ```
 /// use adaptive_engine::pipeline::mocks::FilterPipeline;
 /// use adaptive_engine::pipeline::{Pipeline, Buffer, PipelineId};
-/// use adaptive_engine::sequence::SequenceNumber;
 ///
 /// let filter = FilterPipeline::new(
 ///     PipelineId::new("size-filter"),
@@ -109,7 +107,6 @@ impl Pipeline for FilterPipeline {
 /// ```
 /// use adaptive_engine::pipeline::mocks::MultibufferPipeline;
 /// use adaptive_engine::pipeline::{Pipeline, Buffer, PipelineId};
-/// use adaptive_engine::sequence::SequenceNumber;
 ///
 /// let fanout = MultibufferPipeline::new(PipelineId::new("fanout"), 3);
 ///
@@ -155,10 +152,9 @@ impl Pipeline for MultibufferPipeline {
     ) -> Result<Vec<Buffer>, PipelineError> {
         let mut outputs = Vec::with_capacity(self.fanout);
 
-        for i in 0..self.fanout {
+        for _i in 0..self.fanout {
             let child_data = input.data().to_vec();
-            let child = input.child_buffer(child_data, (i + 1) as u64);
-            outputs.push(child);
+            outputs.push(Buffer::new(child_data));
         }
 
         Ok(outputs)
@@ -179,7 +175,6 @@ impl Pipeline for MultibufferPipeline {
 /// ```
 /// use adaptive_engine::pipeline::mocks::OccasionalEmissionPipeline;
 /// use adaptive_engine::pipeline::{Pipeline, Buffer, PipelineId};
-/// use adaptive_engine::sequence::SequenceNumber;
 ///
 /// let windowing = OccasionalEmissionPipeline::new(PipelineId::new("window"), 3);
 ///
@@ -270,7 +265,6 @@ impl Pipeline for OccasionalEmissionPipeline {
 /// ```
 /// use adaptive_engine::pipeline::mocks::StatefulPipeline;
 /// use adaptive_engine::pipeline::{Pipeline, Buffer, PipelineId};
-/// use adaptive_engine::sequence::SequenceNumber;
 ///
 /// let stateful = StatefulPipeline::new(PipelineId::new("state"));
 ///
@@ -409,7 +403,6 @@ impl Pipeline for StatefulPipeline {
 /// ```
 /// use adaptive_engine::pipeline::mocks::SinkPipeline;
 /// use adaptive_engine::pipeline::{Pipeline, Buffer, PipelineId};
-/// use adaptive_engine::sequence::SequenceNumber;
 ///
 /// let sink = SinkPipeline::new("sink");
 ///
@@ -451,13 +444,12 @@ impl SinkPipeline {
     /// use adaptive_engine::executor::ExecutorContext;
     /// use adaptive_engine::pipeline::mocks::SinkPipeline;
     /// use adaptive_engine::pipeline::{Pipeline, Buffer, PipelineId};
-    /// use adaptive_engine::sequence::SequenceNumber;
     /// use std::sync::mpsc::channel;
     ///
     /// let sink = SinkPipeline::new("sink");
     /// assert_eq!(sink.buffer_count(), 0);
     ///
-    /// let input = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+    /// let input = Buffer::new(vec![1, 2, 3]);
     /// let (tx, _rx) = channel();
     /// let context = ExecutorContext::new(PipelineId::new("test"), 0, 1, tx);
     /// sink.execute(input, &context).unwrap();
@@ -493,7 +485,6 @@ impl Pipeline for SinkPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sequence::SequenceNumber;
     use std::sync::mpsc::channel;
 
     // Helper function to create a mock context for testing
@@ -507,7 +498,7 @@ mod tests {
         let filter = FilterPipeline::new(PipelineId::new("filter"), |b| b.data().len() > 5);
         let context = create_test_context();
 
-        let input = Buffer::new(vec![1, 2, 3, 4, 5, 6], SequenceNumber::new(1));
+        let input = Buffer::new(vec![1, 2, 3, 4, 5, 6]);
         let output = filter.execute(input, &context).unwrap();
 
         assert_eq!(output.len(), 1);
@@ -518,7 +509,7 @@ mod tests {
         let filter = FilterPipeline::new(PipelineId::new("filter"), |b| b.data().len() > 5);
         let context = create_test_context();
 
-        let input = Buffer::new(vec![1, 2], SequenceNumber::new(1));
+        let input = Buffer::new(vec![1, 2]);
         let output = filter.execute(input, &context).unwrap();
 
         assert_eq!(output.len(), 0);
@@ -529,13 +520,10 @@ mod tests {
         let fanout = MultibufferPipeline::new(PipelineId::new("fanout"), 3);
         let context = create_test_context();
 
-        let input = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+        let input = Buffer::new(vec![1, 2, 3]);
         let outputs = fanout.execute(input, &context).unwrap();
 
         assert_eq!(outputs.len(), 3);
-        assert_eq!(outputs[0].sequence().to_string(), "1.1");
-        assert_eq!(outputs[1].sequence().to_string(), "1.2");
-        assert_eq!(outputs[2].sequence().to_string(), "1.3");
 
         // All outputs should have the same data
         for output in &outputs {
@@ -548,10 +536,10 @@ mod tests {
         let windowing = OccasionalEmissionPipeline::new(PipelineId::new("window"), 3);
         let context = create_test_context();
 
-        let b1 = Buffer::new(vec![1], SequenceNumber::new(1));
-        let b2 = Buffer::new(vec![2], SequenceNumber::new(2));
-        let b3 = Buffer::new(vec![3], SequenceNumber::new(3));
-        let b4 = Buffer::new(vec![4], SequenceNumber::new(4));
+        let b1 = Buffer::new(vec![1]);
+        let b2 = Buffer::new(vec![2]);
+        let b3 = Buffer::new(vec![3]);
+        let b4 = Buffer::new(vec![4]);
 
         assert_eq!(windowing.execute(b1, &context).unwrap().len(), 0);
         assert_eq!(windowing.execute(b2, &context).unwrap().len(), 0);
@@ -564,8 +552,8 @@ mod tests {
         let windowing = OccasionalEmissionPipeline::new(PipelineId::new("window"), 2);
         let context = create_test_context();
 
-        let b1 = Buffer::new(vec![1], SequenceNumber::new(1));
-        let b2 = Buffer::new(vec![2], SequenceNumber::new(2));
+        let b1 = Buffer::new(vec![1]);
+        let b2 = Buffer::new(vec![2]);
 
         assert_eq!(windowing.execute(b1, &context).unwrap().len(), 0);
         assert_eq!(windowing.counter(), 1);
@@ -588,7 +576,7 @@ mod tests {
         assert_eq!(value, vec![0, 0, 0, 5]);
 
         // Test execution passes through
-        let input = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+        let input = Buffer::new(vec![1, 2, 3]);
         let output = stateful.execute(input, &context).unwrap();
         assert_eq!(output.len(), 1);
         assert_eq!(output[0].data(), &[1, 2, 3]);

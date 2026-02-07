@@ -92,7 +92,6 @@ impl GeneratorConfig {
 /// ```no_run
 /// use adaptive_engine::source::generator_source::{GeneratorSource, GeneratorConfig};
 /// use adaptive_engine::pipeline::{PipelineId, Buffer};
-/// use adaptive_engine::sequence::SequenceNumber;
 /// use std::time::Duration;
 /// use std::sync::Arc;
 ///
@@ -102,7 +101,7 @@ impl GeneratorConfig {
 ///
 /// let generator = |seq| {
 ///     let data = vec![seq as u8];
-///     Buffer::new(data, SequenceNumber::new(seq))
+///     Buffer::new(data)
 /// };
 ///
 /// let source = GeneratorSource::new(
@@ -143,14 +142,13 @@ where
     /// ```no_run
     /// use adaptive_engine::source::generator_source::{GeneratorSource, GeneratorConfig};
     /// use adaptive_engine::pipeline::{PipelineId, Buffer};
-    /// use adaptive_engine::sequence::SequenceNumber;
     /// use std::time::Duration;
     ///
     /// let config = GeneratorConfig::new(Duration::from_millis(100));
     /// let source = GeneratorSource::new(
     ///     PipelineId::new("gen"),
     ///     config,
-    ///     |seq| Buffer::new(vec![seq as u8], SequenceNumber::new(seq))
+    ///     |seq| Buffer::new(vec![seq as u8])
     /// );
     /// ```
     pub fn new(id: PipelineId, config: GeneratorConfig, generator: F) -> Self {
@@ -171,13 +169,12 @@ where
     /// ```no_run
     /// # use adaptive_engine::source::generator_source::{GeneratorSource, GeneratorConfig};
     /// # use adaptive_engine::pipeline::{PipelineId, Buffer};
-    /// # use adaptive_engine::sequence::SequenceNumber;
     /// # use std::time::Duration;
     /// # let config = GeneratorConfig::new(Duration::from_millis(100));
     /// # let source = GeneratorSource::new(
     /// #     PipelineId::new("gen"),
     /// #     config,
-    /// #     |seq| Buffer::new(vec![seq as u8], SequenceNumber::new(seq))
+    /// #     |seq| Buffer::new(vec![seq as u8])
     /// # );
     /// let count = source.buffer_count();
     /// ```
@@ -192,13 +189,12 @@ where
     /// ```no_run
     /// # use adaptive_engine::source::generator_source::{GeneratorSource, GeneratorConfig};
     /// # use adaptive_engine::pipeline::{PipelineId, Buffer};
-    /// # use adaptive_engine::sequence::SequenceNumber;
     /// # use std::time::Duration;
     /// # let config = GeneratorConfig::new(Duration::from_millis(100));
     /// # let source = GeneratorSource::new(
     /// #     PipelineId::new("gen"),
     /// #     config,
-    /// #     |seq| Buffer::new(vec![seq as u8], SequenceNumber::new(seq))
+    /// #     |seq| Buffer::new(vec![seq as u8])
     /// # );
     /// if source.is_stopped() {
     ///     println!("Source has stopped");
@@ -279,8 +275,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sequence::SequenceNumber;
-
     #[test]
     fn test_generator_config_creation() {
         let config = GeneratorConfig::new(Duration::from_millis(100));
@@ -298,7 +292,7 @@ mod tests {
     fn test_generator_source_creation() {
         let config = GeneratorConfig::new(Duration::from_millis(100));
         let source = GeneratorSource::new(PipelineId::new("test"), config, |seq| {
-            Buffer::new(vec![seq as u8], SequenceNumber::new(seq))
+            Buffer::new(vec![seq as u8])
         });
         assert_eq!(source.id().as_str(), "test");
         assert_eq!(source.buffer_count(), 0);
@@ -309,7 +303,7 @@ mod tests {
     fn test_generator_source_stop() {
         let config = GeneratorConfig::new(Duration::from_millis(100));
         let source = GeneratorSource::new(PipelineId::new("test"), config, |seq| {
-            Buffer::new(vec![seq as u8], SequenceNumber::new(seq))
+            Buffer::new(vec![seq as u8])
         });
 
         assert!(source.stop().is_ok());

@@ -68,7 +68,6 @@
 //! ```no_run
 //! use adaptive_engine::pipeline::{Pipeline, Buffer, PipelineId, PipelineError};
 //! use adaptive_engine::executor::PipelineExecutionContext;
-//! use adaptive_engine::sequence::SequenceNumber;
 //!
 //! struct EmittingPipeline {
 //!     id: PipelineId,
@@ -81,7 +80,7 @@
 //!         context: &dyn PipelineExecutionContext,
 //!     ) -> Result<Vec<Buffer>, PipelineError> {
 //!         // Process the input
-//!         let output = Buffer::new(input.data().to_vec(), SequenceNumber::new(1));
+//!         let output = Buffer::new(input.data().to_vec());
 //!
 //!         // Emit via context (NebulaStream style)
 //!         context.emit_buffer(output);

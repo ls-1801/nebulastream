@@ -32,13 +32,12 @@ enum TestSourceCommand {
 /// ```no_run
 /// use adaptive_engine::source::test_source::{TestSource, TestSourceHandle};
 /// use adaptive_engine::pipeline::{PipelineId, Buffer};
-/// use adaptive_engine::sequence::SequenceNumber;
 /// use std::sync::Arc;
 ///
 /// let (source, handle) = TestSource::new(PipelineId::new("test-src"));
 ///
 /// // Inject a buffer
-/// let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+/// let buffer = Buffer::new(vec![1, 2, 3]);
 /// handle.inject_buffer(buffer);
 ///
 /// // Signal end of stream
@@ -63,9 +62,8 @@ impl TestSourceHandle {
     /// ```no_run
     /// # use adaptive_engine::source::test_source::{TestSource, TestSourceHandle};
     /// # use adaptive_engine::pipeline::{PipelineId, Buffer};
-    /// # use adaptive_engine::sequence::SequenceNumber;
     /// # let (source, handle) = TestSource::new(PipelineId::new("test-src"));
-    /// let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+    /// let buffer = Buffer::new(vec![1, 2, 3]);
     /// handle.inject_buffer(buffer);
     /// ```
     pub fn inject_buffer(&self, buffer: Buffer) {

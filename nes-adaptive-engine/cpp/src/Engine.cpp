@@ -18,11 +18,11 @@ struct RustEngineHandle;
 // These are implemented in src/ffi/engine.rs with #[no_mangle] extern "C"
 extern "C" {
     /// Create a new engine instance
-    RustEngineHandle* engine_create_ffi(uintptr_t buffer_provider_ptr);
+    RustEngineHandle* engine_create_ffi(uintptr_t context_ptr);
 
     /// Create a new engine instance with statistics collection
     RustEngineHandle* engine_create_with_stats_ffi(
-        uintptr_t buffer_provider_ptr,
+        uintptr_t context_ptr,
         RustStatsQueueHandle** out_stats);
 
     /// Start the engine's worker threads
@@ -128,8 +128,8 @@ bool StatsQueue::poll(uint64_t timeout_ms,
 /// Implementation of the Engine interface using Rust FFI
 class EngineImpl : public Engine {
 public:
-    explicit EngineImpl(RustEngineHandle* handle, BufferProvider* provider)
-        : handle_(handle), buffer_provider_(provider) {}
+    explicit EngineImpl(RustEngineHandle* handle)
+        : handle_(handle) {}
 
     ~EngineImpl() override {
         if (handle_) {
@@ -144,9 +144,8 @@ public:
 
     // Movable
     EngineImpl(EngineImpl&& other) noexcept
-        : handle_(other.handle_), buffer_provider_(other.buffer_provider_) {
+        : handle_(other.handle_) {
         other.handle_ = nullptr;
-        other.buffer_provider_ = nullptr;
     }
 
     EngineImpl& operator=(EngineImpl&& other) noexcept {
@@ -155,9 +154,7 @@ public:
                 engine_destroy(handle_);
             }
             handle_ = other.handle_;
-            buffer_provider_ = other.buffer_provider_;
             other.handle_ = nullptr;
-            other.buffer_provider_ = nullptr;
         }
         return *this;
     }
@@ -258,32 +255,31 @@ public:
 
 private:
     RustEngineHandle* handle_;
-    BufferProvider* buffer_provider_;
 };
 
 // Static factory method implementation
-std::unique_ptr<Engine> Engine::create(BufferProvider* buffer_provider) {
-    auto* handle = engine_create_ffi(reinterpret_cast<uintptr_t>(buffer_provider));
+std::unique_ptr<Engine> Engine::create(void* context) {
+    auto* handle = engine_create_ffi(reinterpret_cast<uintptr_t>(context));
     if (!handle) {
         return nullptr;
     }
-    return std::make_unique<EngineImpl>(handle, buffer_provider);
+    return std::make_unique<EngineImpl>(handle);
 }
 
 // Static factory method with statistics collection
 std::unique_ptr<Engine> Engine::create_with_stats(
-    BufferProvider* buffer_provider,
+    void* context,
     std::unique_ptr<StatsQueue>& out_stats_queue) {
     RustStatsQueueHandle* stats_handle = nullptr;
     auto* handle = engine_create_with_stats_ffi(
-        reinterpret_cast<uintptr_t>(buffer_provider), &stats_handle);
+        reinterpret_cast<uintptr_t>(context), &stats_handle);
     if (!handle) {
         return nullptr;
     }
     if (stats_handle) {
         out_stats_queue = std::make_unique<StatsQueue>(stats_handle);
     }
-    return std::make_unique<EngineImpl>(handle, buffer_provider);
+    return std::make_unique<EngineImpl>(handle);
 }
 
 }  // namespace adaptive_engine

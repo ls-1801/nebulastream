@@ -48,18 +48,15 @@ public:
     explicit PipelineExecutionContextAdapter(
         adaptive_engine::ExecutionContext& ctx,
         std::unordered_map<OperatorHandlerId, std::shared_ptr<OperatorHandler>>& handlers)
-        : adaptiveCtx_(ctx), operatorHandlers_(handlers)
+        : adaptiveCtx_(ctx)
+        , nesProvider_(static_cast<NesBufferProvider*>(ctx.get_user_data()))
+        , operatorHandlers_(handlers)
     {
     }
 
     bool emitBuffer(const TupleBuffer& buffer, ContinuationPolicy /*policy*/) override
     {
-        // Get the buffer provider from the adaptive context
-        auto* bufferProvider = adaptiveCtx_.get_buffer_provider();
-
         // Create a NesBufferWrapper directly from the TupleBuffer (which increments ref count).
-        // We cannot use bufferProvider->wrap() here because wrap() expects raw bytes,
-        // but we have a TupleBuffer with proper metadata that should be preserved.
         auto* wrapper = new NesBufferWrapper(buffer);
         adaptive_engine::BufferHandle handle{wrapper};
 
@@ -75,7 +72,7 @@ public:
 
     TupleBuffer allocateTupleBuffer() override
     {
-        auto handle = adaptiveCtx_.allocate_buffer(0);  // Use default pool size
+        auto handle = nesProvider_->allocate(0);  // Use default pool size
         if (handle.opaque == nullptr)
         {
             throw std::runtime_error("Failed to allocate tuple buffer");
@@ -86,6 +83,8 @@ public:
 
         // Note: We copy the buffer, which increments refcount.
         // The original handle's wrapper will be cleaned up separately.
+        // Release the wrapper since we copied the buffer out.
+        wrapper->do_release();
         return buffer;
     }
 
@@ -99,13 +98,7 @@ public:
 
     [[nodiscard]] std::shared_ptr<AbstractBufferProvider> getBufferManager() const override
     {
-        auto* provider = adaptiveCtx_.get_buffer_provider();
-        auto* nesProvider = dynamic_cast<NesBufferProvider*>(provider);
-        if (nesProvider == nullptr)
-        {
-            throw std::runtime_error("Buffer provider is not a NesBufferProvider");
-        }
-        return nesProvider->getUnderlyingProvider();
+        return nesProvider_->getUnderlyingProvider();
     }
 
     [[nodiscard]] PipelineId getPipelineId() const override { return PipelineId(adaptiveCtx_.get_pipeline_id()); }
@@ -122,6 +115,7 @@ public:
 
 private:
     adaptive_engine::ExecutionContext& adaptiveCtx_;
+    NesBufferProvider* nesProvider_;
     std::unordered_map<OperatorHandlerId, std::shared_ptr<OperatorHandler>>& operatorHandlers_;
 };
 

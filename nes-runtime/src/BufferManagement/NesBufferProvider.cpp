@@ -21,15 +21,8 @@
 namespace NES
 {
 
-NesBufferWrapper::NesBufferWrapper(TupleBuffer buf) : buffer(std::move(buf)), metadata{}
+NesBufferWrapper::NesBufferWrapper(TupleBuffer buf) : buffer(std::move(buf))
 {
-    // Extract metadata from the TupleBuffer
-    metadata.sequence_number = buffer.getSequenceNumber().getRawValue();
-    metadata.origin_id = buffer.getOriginId().getRawValue();
-    metadata.watermark = buffer.getWatermark().getRawValue();
-    metadata.num_tuples = buffer.getNumberOfTuples();
-    metadata.chunk_number = static_cast<uint32_t>(buffer.getChunkNumber().getRawValue());
-    metadata.last_chunk = buffer.isLastChunk();
 }
 
 NesBufferProvider::NesBufferProvider(std::shared_ptr<AbstractBufferProvider> nesProvider)
@@ -43,7 +36,6 @@ adaptive_engine::BufferHandle NesBufferProvider::wrap(void* data, size_t size, c
     PRECONDITION(data != nullptr, "Cannot wrap null data pointer");
 
     // Allocate a new TupleBuffer and copy the raw data into it.
-    // The data pointer is raw bytes from the Rust executor, NOT a TupleBuffer*.
     auto handle = allocate(size);
     if (handle.opaque == nullptr)
     {
@@ -57,7 +49,6 @@ adaptive_engine::BufferHandle NesBufferProvider::wrap(void* data, size_t size, c
     std::memcpy(memoryArea.data(), data, size);
 
     // Apply metadata from the Rust side
-    wrapper->metadata = metadata;
     wrapper->buffer.setSequenceNumber(SequenceNumber(metadata.sequence_number));
     wrapper->buffer.setOriginId(OriginId(metadata.origin_id));
     wrapper->buffer.setWatermark(Timestamp(metadata.watermark));
@@ -66,18 +57,6 @@ adaptive_engine::BufferHandle NesBufferProvider::wrap(void* data, size_t size, c
     wrapper->buffer.setLastChunk(metadata.last_chunk);
 
     return handle;
-}
-
-void NesBufferProvider::release(adaptive_engine::BufferHandle handle)
-{
-    if (handle.opaque == nullptr)
-    {
-        return;
-    }
-
-    auto* wrapper = static_cast<NesBufferWrapper*>(handle.opaque);
-    // Destructor of NesBufferWrapper will release the TupleBuffer
-    delete wrapper;
 }
 
 void* NesBufferProvider::get_data(adaptive_engine::BufferHandle handle)
@@ -95,14 +74,6 @@ size_t NesBufferProvider::get_size(adaptive_engine::BufferHandle handle)
 
     auto* wrapper = static_cast<NesBufferWrapper*>(handle.opaque);
     return wrapper->buffer.getBufferSize();
-}
-
-const adaptive_engine::BufferMetadata& NesBufferProvider::get_metadata(adaptive_engine::BufferHandle handle)
-{
-    PRECONDITION(handle.opaque != nullptr, "Cannot get metadata from null handle");
-
-    auto* wrapper = static_cast<NesBufferWrapper*>(handle.opaque);
-    return wrapper->metadata;
 }
 
 adaptive_engine::BufferHandle NesBufferProvider::allocate(size_t size)

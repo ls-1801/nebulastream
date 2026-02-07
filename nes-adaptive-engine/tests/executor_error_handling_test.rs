@@ -2,7 +2,6 @@ use adaptive_engine::executor::error::{EntityType, TaskType};
 use adaptive_engine::executor::{Executor, FifoQueue};
 use adaptive_engine::graph::PipelineGraph;
 use adaptive_engine::pipeline::{Buffer, Pipeline, PipelineError, PipelineId};
-use adaptive_engine::sequence::SequenceNumber;
 use adaptive_engine::source::{Source, SourceEmitHandle, SourceError};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -13,14 +12,14 @@ use std::time::Duration;
 // MOCK PIPELINES
 // ============================================================================
 
-/// Pipeline that fails on specific sequence numbers.
+/// Pipeline that fails on specific data values (first byte).
 struct FailingPipeline {
     id: PipelineId,
-    fail_on: Arc<Mutex<HashSet<u64>>>,
+    fail_on: Arc<Mutex<HashSet<u8>>>,
 }
 
 impl FailingPipeline {
-    fn new(id: impl Into<String>, fail_on: Vec<u64>) -> Self {
+    fn new(id: impl Into<String>, fail_on: Vec<u8>) -> Self {
         Self {
             id: PipelineId::new(id),
             fail_on: Arc::new(Mutex::new(fail_on.into_iter().collect())),
@@ -34,12 +33,11 @@ impl Pipeline for FailingPipeline {
         input: Buffer,
         _context: &dyn adaptive_engine::executor::PipelineExecutionContext,
     ) -> Result<Vec<Buffer>, PipelineError> {
-        let seq_str = input.sequence().to_string();
-        if let Ok(seq_num) = seq_str.parse::<u64>() {
-            if self.fail_on.lock().unwrap().contains(&seq_num) {
+        if let Some(&first_byte) = input.data().first() {
+            if self.fail_on.lock().unwrap().contains(&first_byte) {
                 return Err(PipelineError::ExecutionFailed(format!(
-                    "Intentional failure on sequence {}",
-                    seq_num
+                    "Intentional failure on buffer with data {}",
+                    first_byte
                 )));
             }
         }
@@ -176,7 +174,7 @@ fn test_pipeline_error_terminates_immediately() {
     let executor = Executor::with_queue(FifoQueue::new());
     let handle = executor.get_handle();
 
-    // Pipeline fails on sequence 5
+    // Pipeline fails on data byte 5
     let mut graph = PipelineGraph::new();
     let failing = FailingPipeline::new("fail", vec![5]);
     let id = failing.id().clone();
@@ -187,9 +185,9 @@ fn test_pipeline_error_terminates_immediately() {
     let exec_thread = thread::spawn(move || executor.run());
     thread::sleep(Duration::from_millis(10));
 
-    // Emit sequences 1-10
-    for i in 1u64..=10 {
-        let buffer = Buffer::new(vec![i as u8], SequenceNumber::new(i));
+    // Emit buffers with data bytes 1-10
+    for i in 1u8..=10 {
+        let buffer = Buffer::new(vec![i]);
         let _ = handle.emit(id.clone(), buffer);
     }
 
@@ -213,7 +211,7 @@ fn test_error_in_middle_pipeline_stops_graph() {
     let executor = Executor::with_queue(FifoQueue::new());
     let handle = executor.get_handle();
 
-    // Graph: A → B (fails on 3) → C
+    // Graph: A → B (fails on data byte 3) → C
     let mut graph = PipelineGraph::new();
 
     let a = PassthroughPipeline::new("A");
@@ -239,9 +237,9 @@ fn test_error_in_middle_pipeline_stops_graph() {
     let exec_thread = thread::spawn(move || executor.run());
     thread::sleep(Duration::from_millis(10));
 
-    // Emit sequences 1-5
-    for i in 1u64..=5 {
-        let buffer = Buffer::new(vec![i as u8], SequenceNumber::new(i));
+    // Emit buffers with data bytes 1-5
+    for i in 1u8..=5 {
+        let buffer = Buffer::new(vec![i]);
         let _ = handle.emit(a_id.clone(), buffer);
     }
 
@@ -249,7 +247,7 @@ fn test_error_in_middle_pipeline_stops_graph() {
     let stats = exec_thread.join().unwrap();
 
     // A should process all buffers it received before error
-    // B should fail on sequence 3
+    // B should fail on data byte 3
     // C should not execute after error
     assert!(stats.has_errors());
     assert_eq!(stats.errors.len(), 1);
@@ -294,7 +292,7 @@ fn test_multiple_errors_captured() {
     let executor = Executor::with_queue(FifoQueue::new());
     let handle = executor.get_handle();
 
-    // Pipeline that fails on sequence 2
+    // Pipeline that fails on data byte 2
     let mut graph = PipelineGraph::new();
 
     let p1 = FailingPipeline::new("P1", vec![2]);
@@ -308,8 +306,8 @@ fn test_multiple_errors_captured() {
     thread::sleep(Duration::from_millis(10));
 
     // Emit multiple buffers
-    for i in 1u64..=5 {
-        let buffer = Buffer::new(vec![i as u8], SequenceNumber::new(i));
+    for i in 1u8..=5 {
+        let buffer = Buffer::new(vec![i]);
         let _ = handle.emit(p1_id.clone(), buffer);
     }
 
@@ -326,7 +324,7 @@ fn test_pending_tasks_skipped_after_error() {
     let executor = Executor::with_queue(FifoQueue::new());
     let handle = executor.get_handle();
 
-    // Pipeline that fails on sequence 2
+    // Pipeline that fails on data byte 2
     let mut graph = PipelineGraph::new();
     let tracker = PassthroughPipeline::new("tracker");
     let failing = FailingPipeline::new("fail", vec![2]);
@@ -344,15 +342,15 @@ fn test_pending_tasks_skipped_after_error() {
     thread::sleep(Duration::from_millis(10));
 
     // Enqueue many tasks quickly
-    for i in 1u64..=20 {
-        let buffer = Buffer::new(vec![i as u8], SequenceNumber::new(i));
+    for i in 1u8..=20 {
+        let buffer = Buffer::new(vec![i]);
         let _ = handle.emit(failing_id.clone(), buffer);
     }
 
     handle.shutdown().ok();
     let stats = exec_thread.join().unwrap();
 
-    // Should fail on buffer 2, skip remaining
+    // Should fail on buffer with data byte 2, skip remaining
     assert!(stats.has_errors());
     // Should process buffer 1 successfully, then fail on buffer 2
     assert!(stats.buffers_processed <= 2); // At most 2 buffers processed
@@ -364,11 +362,11 @@ fn test_pending_tasks_skipped_after_error() {
 }
 
 #[test]
-fn test_emit_fails_after_error_detected() {
+fn test_emit_after_error_is_skipped() {
     let executor = Executor::with_queue(FifoQueue::new());
     let handle = executor.get_handle();
 
-    // Pipeline that fails on first buffer
+    // Pipeline that fails on first buffer (data byte 1)
     let mut graph = PipelineGraph::new();
     let failing = FailingPipeline::new("fail", vec![1]);
     let id = failing.id().clone();
@@ -379,26 +377,24 @@ fn test_emit_fails_after_error_detected() {
     let exec_thread = thread::spawn(move || executor.run());
     thread::sleep(Duration::from_millis(10));
 
-    // Emit first buffer (will fail)
-    let buffer1 = Buffer::new(vec![1], SequenceNumber::new(1));
+    // Emit first buffer (will fail during execution)
+    let buffer1 = Buffer::new(vec![1]);
     handle.emit(id.clone(), buffer1).ok();
 
     // Wait for error to be detected
     thread::sleep(Duration::from_millis(50));
 
-    // Try to emit another buffer - should fail
-    let buffer2 = Buffer::new(vec![2], SequenceNumber::new(2));
-    let result = handle.emit(id.clone(), buffer2);
+    // Emit another buffer - enqueue succeeds (per-query error isolation,
+    // filter-on-dequeue pattern), but the task will be skipped at dequeue time
+    let buffer2 = Buffer::new(vec![2]);
+    assert!(handle.emit(id.clone(), buffer2).is_ok());
 
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("executor is in error state"));
-
+    thread::sleep(Duration::from_millis(50));
     handle.shutdown().ok();
     let stats = exec_thread.join().unwrap();
     assert!(stats.has_errors());
+    // The second buffer should have been skipped, not processed
+    assert!(stats.buffers_processed <= 1);
 }
 
 #[test]
@@ -432,7 +428,7 @@ fn test_setup_error_during_deployment() {
 }
 
 #[test]
-fn test_deploy_graph_fails_after_error() {
+fn test_deploy_graph_succeeds_after_error_with_query_isolation() {
     let executor = Executor::with_queue(FifoQueue::new());
     let handle = executor.get_handle();
 
@@ -446,27 +442,23 @@ fn test_deploy_graph_fails_after_error() {
     let exec_thread = thread::spawn(move || executor.run());
     thread::sleep(Duration::from_millis(50)); // Give time for error
 
-    // Try to deploy another graph - should fail
+    // Deploy another graph - succeeds because each query has isolated
+    // error state. A failed query doesn't block new deployments.
     let graph2 = PipelineGraph::new();
-    let result = handle.deploy_graph(graph2);
-
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("executor is in error state"));
+    assert!(handle.deploy_graph(graph2).is_ok());
 
     handle.shutdown().ok();
     let stats = exec_thread.join().unwrap();
     assert!(stats.has_errors());
+    assert_eq!(stats.graphs_deployed, 2);
 }
 
 #[test]
-fn test_end_of_stream_fails_after_error() {
+fn test_end_of_stream_enqueues_after_error() {
     let executor = Executor::with_queue(FifoQueue::new());
     let handle = executor.get_handle();
 
-    // Pipeline that fails on first buffer
+    // Pipeline that fails on first buffer (data byte 1)
     let mut graph = PipelineGraph::new();
     let failing = FailingPipeline::new("fail", vec![1]);
     let id = failing.id().clone();
@@ -478,21 +470,16 @@ fn test_end_of_stream_fails_after_error() {
     thread::sleep(Duration::from_millis(10));
 
     // Emit buffer that causes failure
-    let buffer = Buffer::new(vec![1], SequenceNumber::new(1));
+    let buffer = Buffer::new(vec![1]);
     handle.emit(id.clone(), buffer).ok();
 
     // Wait for error
     thread::sleep(Duration::from_millis(50));
 
-    // Try to signal end-of-stream - should fail
+    // Signal end-of-stream - enqueue succeeds (EOS signals are always
+    // enqueued for proper cleanup, per filter-on-dequeue pattern)
     let source_id = PipelineId::new("source");
-    let result = handle.end_of_stream(source_id, id.clone());
-
-    assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("executor is in error state"));
+    assert!(handle.end_of_stream(source_id, id.clone()).is_ok());
 
     handle.shutdown().ok();
     let stats = exec_thread.join().unwrap();

@@ -9,7 +9,6 @@
 //! ```no_run
 //! use adaptive_engine::executor::PipelineExecutionContext;
 //! use adaptive_engine::pipeline::{Pipeline, Buffer, PipelineId, PipelineError};
-//! use adaptive_engine::sequence::SequenceNumber;
 //!
 //! struct MyPipeline {
 //!     id: PipelineId,
@@ -34,7 +33,6 @@
 pub mod compat;
 pub mod mocks;
 
-use crate::sequence::SequenceNumber;
 use std::fmt;
 use thiserror::Error;
 
@@ -98,486 +96,199 @@ impl From<String> for PipelineId {
 
 /// Buffer containing data flowing through pipelines.
 ///
-/// Buffers carry both data payload and sequence number tracking
-/// for lineage and exactly-once processing guarantees.
-///
 /// # Dual Mode Support
 ///
 /// Buffers can be either:
-/// - **Opaque**: Reference-counted C++ TupleBuffer (zero-copy, for NebulaStream integration)
-/// - **Owned**: Rust-owned Vec<u8> (for Rust-native pipelines)
-///
-/// # NebulaStream Compatibility
-///
-/// This buffer includes metadata fields compatible with NebulaStream's TupleBuffer:
-/// - `origin_id` - ID of the source that originated this buffer
-/// - `watermark` - Event-time watermark for stream processing
-/// - `number_of_tuples` - Number of tuples contained in the buffer
-/// - `chunk_number` - For chunked buffers, the chunk index
-/// - `is_last_chunk` - Whether this is the last chunk
-///
-/// These fields enable watermark tracking, provenance, and chunked data
-/// handling while maintaining backward compatibility with simple buffers.
+/// - **Opaque**: C++ buffer via opaque handle. No data copy, no metadata on Rust side.
+/// - **Owned**: Rust-owned Vec<u8> for unit tests / mock pipelines.
 ///
 /// # Examples
 ///
 /// ```
 /// use adaptive_engine::pipeline::Buffer;
-/// use adaptive_engine::sequence::SequenceNumber;
 ///
-/// // Create Rust-owned buffer (backward compatible)
-/// let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+/// // Create Rust-owned buffer
+/// let buffer = Buffer::new(vec![1, 2, 3]);
 /// assert_eq!(buffer.data(), &[1, 2, 3]);
 /// ```
-#[derive(Clone)]
 pub struct Buffer {
     inner: BufferInner,
-    sequence: SequenceNumber,
 }
 
-/// An opaque reference to a C++ buffer handle that preserves the full buffer
-/// structure (including child buffers for variable-sized data) across the FFI boundary.
+/// Internal representation: either an opaque C++ handle or owned Rust data.
+enum BufferInner {
+    /// C++ buffer via opaque handle. No data copy, no metadata on Rust side.
+    Opaque(OpaqueBufferHandle),
+    /// Rust-owned data for unit tests / mock pipelines.
+    Owned(Vec<u8>),
+}
+
+impl Clone for Buffer {
+    fn clone(&self) -> Self {
+        Self {
+            inner: match &self.inner {
+                BufferInner::Opaque(handle) => BufferInner::Opaque(handle.clone()),
+                BufferInner::Owned(data) => BufferInner::Owned(data.clone()),
+            },
+        }
+    }
+}
+
+/// An opaque reference to a C++ buffer handle.
 ///
-/// When present, this handle is passed directly to C++ stages instead of copying
-/// raw bytes, avoiding loss of child buffers.
-///
-/// Uses reference counting (Arc) so the handle can be shared across fan-out
-/// routing without double-free. The C++ buffer is released when the last
-/// reference is dropped.
-#[derive(Clone)]
+/// Each handle is independently owned. Clone goes through FFI to
+/// `buffer_handle_clone`, Drop goes through `buffer_handle_release`.
+/// No Arc — C++ refcounting drives everything via virtual dispatch
+/// on BufferHandleBase.
 pub struct OpaqueBufferHandle {
-    inner: std::sync::Arc<OpaqueBufferHandleInner>,
-}
-
-struct OpaqueBufferHandleInner {
-    /// The C++ BufferProvider pointer (needed to release the handle)
-    provider_ptr: usize,
-    /// The opaque handle value (e.g., NesBufferWrapper*)
+    /// The opaque handle value (e.g., NesBufferWrapper* which inherits BufferHandleBase)
     handle: usize,
 }
 
 impl OpaqueBufferHandle {
     /// Create a new opaque buffer handle.
-    pub fn new(provider_ptr: usize, handle: usize) -> Self {
-        Self {
-            inner: std::sync::Arc::new(OpaqueBufferHandleInner {
-                provider_ptr,
-                handle,
-            }),
-        }
-    }
-
-    /// Get the provider pointer.
-    pub fn provider_ptr(&self) -> usize {
-        self.inner.provider_ptr
+    pub fn new(handle: usize) -> Self {
+        Self { handle }
     }
 
     /// Get the opaque handle value.
     pub fn handle(&self) -> usize {
-        self.inner.handle
-    }
-
-    /// Check if this is the only reference to the handle.
-    /// When true, the handle can be consumed (moved to a stage) without
-    /// needing to keep the C++ buffer alive.
-    pub fn is_unique(&self) -> bool {
-        std::sync::Arc::strong_count(&self.inner) == 1
+        self.handle
     }
 }
 
-impl Drop for OpaqueBufferHandleInner {
+#[cfg(feature = "cpp-ffi")]
+impl Clone for OpaqueBufferHandle {
+    fn clone(&self) -> Self {
+        let new_handle = unsafe { crate::ffi::callbacks::buffer_handle_clone(self.handle) };
+        Self { handle: new_handle }
+    }
+}
+
+#[cfg(not(feature = "cpp-ffi"))]
+impl Clone for OpaqueBufferHandle {
+    fn clone(&self) -> Self {
+        panic!("OpaqueBufferHandle::clone() requires cpp-ffi feature");
+    }
+}
+
+#[cfg(feature = "cpp-ffi")]
+impl Drop for OpaqueBufferHandle {
     fn drop(&mut self) {
-        // Release the C++ buffer when the last reference is dropped.
-        // This is safe because the C++ BufferProvider::release() deletes
-        // the NesBufferWrapper which decrements the TupleBuffer ref count.
         if self.handle != 0 {
             unsafe {
-                crate::ffi::callbacks::buffer_provider_release(self.provider_ptr, self.handle);
+                crate::ffi::callbacks::buffer_handle_release(self.handle);
             }
         }
     }
 }
 
-// SAFETY: OpaqueBufferHandleInner contains only usize values (opaque pointers).
-// The C++ objects they point to are managed by the BufferProvider which is
-// thread-safe by contract.
-unsafe impl Send for OpaqueBufferHandleInner {}
-unsafe impl Sync for OpaqueBufferHandleInner {}
-
-/// Internal representation of buffer data.
-#[derive(Clone)]
-struct BufferInner {
-    data: Vec<u8>,
-    origin_id: Option<u64>,
-    watermark: Option<u64>,
-    number_of_tuples: u64,
-    chunk_number: Option<u64>,
-    is_last_chunk: bool,
-    /// Optional opaque handle to a C++ buffer. When set, this handle is passed
-    /// directly to C++ stages to preserve child buffers for variable-sized data.
-    opaque_handle: Option<OpaqueBufferHandle>,
+#[cfg(not(feature = "cpp-ffi"))]
+impl Drop for OpaqueBufferHandle {
+    fn drop(&mut self) {
+        if self.handle != 0 {
+            eprintln!(
+                "Warning: OpaqueBufferHandle::drop() called without cpp-ffi feature (handle={})",
+                self.handle
+            );
+        }
+    }
 }
 
+// SAFETY: OpaqueBufferHandle contains only a usize value (opaque pointer).
+// The C++ objects they point to use virtual dispatch for clone/release
+// which is thread-safe by contract.
+unsafe impl Send for OpaqueBufferHandle {}
+unsafe impl Sync for OpaqueBufferHandle {}
+
 impl Buffer {
-    /// Create a new buffer with data and sequence number.
-    ///
-    /// This creates a simple buffer with default metadata values.
-    /// Use builder methods to add metadata for NebulaStream compatibility.
+    /// Create a new buffer with owned data.
     ///
     /// # Arguments
     ///
     /// * `data` - The data payload
-    /// * `sequence` - The hierarchical sequence number
     ///
     /// # Examples
     ///
     /// ```
     /// use adaptive_engine::pipeline::Buffer;
-    /// use adaptive_engine::sequence::SequenceNumber;
     ///
-    /// let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+    /// let buffer = Buffer::new(vec![1, 2, 3]);
     /// assert_eq!(buffer.data(), &[1, 2, 3]);
     /// ```
-    pub fn new(data: Vec<u8>, sequence: SequenceNumber) -> Self {
+    pub fn new(data: Vec<u8>) -> Self {
         Self {
-            inner: BufferInner {
-                data,
-                origin_id: None,
-                watermark: None,
-                number_of_tuples: 0,
-                chunk_number: None,
-                is_last_chunk: false,
-                opaque_handle: None,
-            },
-            sequence,
+            inner: BufferInner::Owned(data),
         }
     }
 
-    /// Set the origin ID (source that originated this buffer).
+    /// Create a buffer wrapping an opaque C++ handle.
     ///
-    /// # Arguments
-    ///
-    /// * `origin_id` - The ID of the source node
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::pipeline::Buffer;
-    /// use adaptive_engine::sequence::SequenceNumber;
-    ///
-    /// let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1))
-    ///     .with_origin(42);
-    /// assert_eq!(buffer.origin_id(), Some(42));
-    /// ```
-    pub fn with_origin(mut self, origin_id: u64) -> Self {
-        self.inner.origin_id = Some(origin_id);
-        self
-    }
-
-    /// Set the watermark for event-time processing.
-    ///
-    /// # Arguments
-    ///
-    /// * `watermark` - The event-time watermark
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::pipeline::Buffer;
-    /// use adaptive_engine::sequence::SequenceNumber;
-    ///
-    /// let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1))
-    ///     .with_watermark(1000);
-    /// assert_eq!(buffer.watermark(), Some(1000));
-    /// ```
-    pub fn with_watermark(mut self, watermark: u64) -> Self {
-        self.inner.watermark = Some(watermark);
-        self
-    }
-
-    /// Set the number of tuples in this buffer.
-    ///
-    /// # Arguments
-    ///
-    /// * `count` - The number of tuples
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::pipeline::Buffer;
-    /// use adaptive_engine::sequence::SequenceNumber;
-    ///
-    /// let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1))
-    ///     .with_tuple_count(10);
-    /// assert_eq!(buffer.number_of_tuples(), 10);
-    /// ```
-    pub fn with_tuple_count(mut self, count: u64) -> Self {
-        self.inner.number_of_tuples = count;
-        self
-    }
-
-    /// Set chunking information for large buffers.
-    ///
-    /// # Arguments
-    ///
-    /// * `chunk_number` - The chunk index (0-based)
-    /// * `is_last` - Whether this is the last chunk
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::pipeline::Buffer;
-    /// use adaptive_engine::sequence::SequenceNumber;
-    ///
-    /// let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1))
-    ///     .with_chunk_info(0, false);
-    /// assert_eq!(buffer.chunk_number(), Some(0));
-    /// assert!(!buffer.is_last_chunk());
-    /// ```
-    pub fn with_chunk_info(mut self, chunk_num: u64, is_last: bool) -> Self {
-        self.inner.chunk_number = Some(chunk_num);
-        self.inner.is_last_chunk = is_last;
-        self
-    }
-
-    /// Get the origin ID if set.
-    ///
-    /// # Returns
-    ///
-    /// The origin ID, or `None` if not set.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::pipeline::Buffer;
-    /// use adaptive_engine::sequence::SequenceNumber;
-    ///
-    /// let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
-    /// assert_eq!(buffer.origin_id(), None);
-    ///
-    /// let buffer = buffer.with_origin(42);
-    /// assert_eq!(buffer.origin_id(), Some(42));
-    /// ```
-    pub fn origin_id(&self) -> Option<u64> {
-        self.inner.origin_id
-    }
-
-    /// Get the watermark if set.
-    ///
-    /// # Returns
-    ///
-    /// The watermark, or `None` if not set.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::pipeline::Buffer;
-    /// use adaptive_engine::sequence::SequenceNumber;
-    ///
-    /// let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1))
-    ///     .with_watermark(1000);
-    /// assert_eq!(buffer.watermark(), Some(1000));
-    /// ```
-    pub fn watermark(&self) -> Option<u64> {
-        self.inner.watermark
-    }
-
-    /// Get the number of tuples in this buffer.
-    ///
-    /// # Returns
-    ///
-    /// The number of tuples (0 if not set).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::pipeline::Buffer;
-    /// use adaptive_engine::sequence::SequenceNumber;
-    ///
-    /// let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1))
-    ///     .with_tuple_count(5);
-    /// assert_eq!(buffer.number_of_tuples(), 5);
-    /// ```
-    pub fn number_of_tuples(&self) -> u64 {
-        self.inner.number_of_tuples
-    }
-
-    /// Get the chunk number if this is a chunked buffer.
-    ///
-    /// # Returns
-    ///
-    /// The chunk number, or `None` if not chunked.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::pipeline::Buffer;
-    /// use adaptive_engine::sequence::SequenceNumber;
-    ///
-    /// let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1))
-    ///     .with_chunk_info(2, false);
-    /// assert_eq!(buffer.chunk_number(), Some(2));
-    /// ```
-    pub fn chunk_number(&self) -> Option<u64> {
-        self.inner.chunk_number
-    }
-
-    /// Set the opaque C++ buffer handle.
-    ///
-    /// When set, the Rust executor will pass this handle directly to C++ stages
-    /// instead of copying raw bytes, preserving child buffers for variable-sized data.
-    pub fn with_opaque_handle(mut self, handle: OpaqueBufferHandle) -> Self {
-        self.inner.opaque_handle = Some(handle);
-        self
-    }
-
-    /// Get the opaque C++ buffer handle, if set.
-    pub fn opaque_handle(&self) -> Option<&OpaqueBufferHandle> {
-        self.inner.opaque_handle.as_ref()
-    }
-
-    /// Check if this is the last chunk.
-    ///
-    /// # Returns
-    ///
-    /// `true` if this is the last chunk, `false` otherwise.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::pipeline::Buffer;
-    /// use adaptive_engine::sequence::SequenceNumber;
-    ///
-    /// let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1))
-    ///     .with_chunk_info(2, true);
-    /// assert!(buffer.is_last_chunk());
-    /// ```
-    pub fn is_last_chunk(&self) -> bool {
-        self.inner.is_last_chunk
+    /// The buffer treats the C++ handle as opaque — no data access,
+    /// no metadata. Clone and Drop go through FFI.
+    pub fn opaque(handle: OpaqueBufferHandle) -> Self {
+        Self {
+            inner: BufferInner::Opaque(handle),
+        }
     }
 
     /// Get a reference to the buffer's data.
     ///
+    /// Returns the owned data for Owned buffers, or an empty slice for Opaque buffers.
+    ///
     /// # Examples
     ///
     /// ```
     /// use adaptive_engine::pipeline::Buffer;
-    /// use adaptive_engine::sequence::SequenceNumber;
     ///
-    /// let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+    /// let buffer = Buffer::new(vec![1, 2, 3]);
     /// assert_eq!(buffer.data(), &[1, 2, 3]);
     /// ```
     pub fn data(&self) -> &[u8] {
-        &self.inner.data
+        match &self.inner {
+            BufferInner::Owned(data) => data,
+            BufferInner::Opaque(_) => &[],
+        }
     }
 
     /// Get a mutable reference to the buffer's data.
     ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::pipeline::Buffer;
-    /// use adaptive_engine::sequence::SequenceNumber;
-    ///
-    /// let mut buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
-    /// buffer.data_mut()[0] = 42;
-    /// assert_eq!(buffer.data()[0], 42);
-    /// ```
+    /// Only available for Owned buffers. Panics for Opaque buffers.
     pub fn data_mut(&mut self) -> &mut Vec<u8> {
-        &mut self.inner.data
-    }
-
-    /// Get a reference to the buffer's sequence number.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::pipeline::Buffer;
-    /// use adaptive_engine::sequence::SequenceNumber;
-    ///
-    /// let seq = SequenceNumber::new(1);
-    /// let buffer = Buffer::new(vec![1, 2, 3], seq.clone());
-    /// assert_eq!(buffer.sequence(), &seq);
-    /// ```
-    pub fn sequence(&self) -> &SequenceNumber {
-        &self.sequence
-    }
-
-    /// Create a child buffer with a new sequence number.
-    ///
-    /// This is used when a pipeline emits multiple buffers from
-    /// a single input buffer. The child inherits all metadata from
-    /// the parent (origin, watermark, etc.).
-    ///
-    /// # Arguments
-    ///
-    /// * `data` - The data for the child buffer
-    /// * `offset` - The child offset for the sequence number
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::pipeline::Buffer;
-    /// use adaptive_engine::sequence::SequenceNumber;
-    ///
-    /// let parent = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1))
-    ///     .with_origin(42)
-    ///     .with_watermark(1000);
-    /// let child = parent.child_buffer(vec![4, 5, 6], 1);
-    /// assert_eq!(child.sequence().to_string(), "1.1");
-    /// assert_eq!(child.origin_id(), Some(42));
-    /// assert_eq!(child.watermark(), Some(1000));
-    /// ```
-    pub fn child_buffer(&self, data: Vec<u8>, offset: u64) -> Self {
-        Self {
-            inner: BufferInner {
-                data,
-                // Inherit metadata from parent
-                origin_id: self.origin_id(),
-                watermark: self.watermark(),
-                number_of_tuples: self.number_of_tuples(),
-                chunk_number: self.chunk_number(),
-                is_last_chunk: self.is_last_chunk(),
-                // Child buffers don't inherit opaque handle
-                opaque_handle: None,
-            },
-            sequence: self.sequence.child(offset),
+        match &mut self.inner {
+            BufferInner::Owned(data) => data,
+            BufferInner::Opaque(_) => panic!("Cannot get mutable data from opaque buffer"),
         }
     }
 
-    /// Consume this buffer and return its data and sequence number.
-    ///
-    /// # Returns
-    ///
-    /// A tuple of (data, sequence) from this buffer.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::pipeline::Buffer;
-    /// use adaptive_engine::sequence::SequenceNumber;
-    ///
-    /// let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
-    /// let (data, seq) = buffer.into_parts();
-    /// assert_eq!(data, vec![1, 2, 3]);
-    /// assert_eq!(seq.to_string(), "1");
-    /// ```
-    pub fn into_parts(self) -> (Vec<u8>, SequenceNumber) {
-        (self.inner.data, self.sequence)
+    /// Get the opaque C++ buffer handle, if this is an Opaque buffer.
+    pub fn opaque_handle(&self) -> Option<&OpaqueBufferHandle> {
+        match &self.inner {
+            BufferInner::Opaque(handle) => Some(handle),
+            BufferInner::Owned(_) => None,
+        }
+    }
+
+    /// Check if this buffer is opaque (C++ handle).
+    pub fn is_opaque(&self) -> bool {
+        matches!(&self.inner, BufferInner::Opaque(_))
     }
 }
 
 impl fmt::Debug for Buffer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Buffer")
-            .field("sequence", &self.sequence)
-            .field("size", &self.data().len())
-            .field("origin_id", &self.origin_id())
-            .field("watermark", &self.watermark())
-            .field("number_of_tuples", &self.number_of_tuples())
-            .field("chunk_number", &self.chunk_number())
-            .field("is_last_chunk", &self.is_last_chunk())
-            .finish()
+        match &self.inner {
+            BufferInner::Owned(data) => f
+                .debug_struct("Buffer")
+                .field("type", &"owned")
+                .field("size", &data.len())
+                .finish(),
+            BufferInner::Opaque(handle) => f
+                .debug_struct("Buffer")
+                .field("type", &"opaque")
+                .field("handle", &handle.handle)
+                .finish(),
+        }
     }
 }
 
@@ -613,16 +324,6 @@ pub enum PipelineError {
 ///
 /// Violating these invariants (e.g., executing before setup) causes a panic.
 ///
-/// # NebulaStream Compatibility
-///
-/// This trait now accepts a `PipelineExecutionContext` parameter in all lifecycle
-/// methods, matching NebulaStream's adaptive_engine::PipelineStage interface. Pipelines
-/// can use the context to:
-/// - Emit buffers via `context.emit_buffer()` (NebulaStream style)
-/// - Return buffers directly (simple style)
-/// - Allocate buffers from the pool
-/// - Access worker thread information
-///
 /// # Examples
 ///
 /// Simple style (return outputs):
@@ -649,83 +350,8 @@ pub enum PipelineError {
 ///     }
 /// }
 /// ```
-///
-/// NebulaStream style (emit via context):
-/// ```no_run
-/// use adaptive_engine::pipeline::{Pipeline, Buffer, PipelineId, PipelineError};
-/// use adaptive_engine::executor::PipelineExecutionContext;
-///
-/// struct EmitPipeline {
-///     id: PipelineId,
-/// }
-///
-/// impl Pipeline for EmitPipeline {
-///     fn execute(
-///         &self,
-///         input: Buffer,
-///         context: &dyn PipelineExecutionContext
-///     ) -> Result<Vec<Buffer>, PipelineError> {
-///         // Process and emit via context
-///         context.emit_buffer(input);
-///         // Return empty when using emit
-///         Ok(vec![])
-///     }
-///
-///     fn id(&self) -> &PipelineId {
-///         &self.id
-///     }
-/// }
-/// ```
 pub trait Pipeline: Send + Sync + std::any::Any {
     /// Called once when pipeline is started, before first buffer.
-    ///
-    /// Use this to:
-    /// - Initialize connections
-    /// - Allocate resources
-    /// - Verify configuration
-    /// - Set up state
-    ///
-    /// # Arguments
-    ///
-    /// * `context` - Execution context providing access to executor services
-    ///
-    /// # Errors
-    ///
-    /// If setup fails, the pipeline will not execute and the error is recorded.
-    /// No buffers will be processed until setup succeeds.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use adaptive_engine::pipeline::{Pipeline, Buffer, PipelineId, PipelineError};
-    /// use adaptive_engine::executor::PipelineExecutionContext;
-    ///
-    /// struct DatabasePipeline {
-    ///     id: PipelineId,
-    ///     // connection: Option<DbConnection>,
-    /// }
-    ///
-    /// impl Pipeline for DatabasePipeline {
-    ///     fn setup(&self, _context: &dyn PipelineExecutionContext) -> Result<(), PipelineError> {
-    ///         // Initialize database connection
-    ///         // self.connection = Some(DbConnection::new()?);
-    ///         Ok(())
-    ///     }
-    ///
-    ///     fn execute(
-    ///         &self,
-    ///         input: Buffer,
-    ///         _context: &dyn PipelineExecutionContext
-    ///     ) -> Result<Vec<Buffer>, PipelineError> {
-    ///         // Use connection to process data
-    ///         Ok(vec![input])
-    ///     }
-    ///
-    ///     fn id(&self) -> &PipelineId {
-    ///         &self.id
-    ///     }
-    /// }
-    /// ```
     fn setup(
         &self,
         _context: &dyn crate::executor::PipelineExecutionContext,
@@ -734,32 +360,6 @@ pub trait Pipeline: Send + Sync + std::any::Any {
     }
 
     /// Process an input buffer, potentially emitting 0-N output buffers.
-    ///
-    /// The pipeline receives a single input buffer and may emit zero or more
-    /// output buffers. This supports:
-    /// - Filter pipelines (0 or 1 output)
-    /// - Transform pipelines (1 output)
-    /// - Fanout pipelines (N outputs)
-    /// - Windowing pipelines (0 or 1 output, depending on window state)
-    ///
-    /// # Output Modes
-    ///
-    /// Pipelines can output buffers in two ways:
-    /// 1. **Return style**: Return buffers directly (simple, backward compatible)
-    /// 2. **Emit style**: Call `context.emit_buffer()` and return empty vec (NebulaStream compatible)
-    ///
-    /// # Arguments
-    ///
-    /// * `input` - The buffer to process
-    /// * `context` - Execution context for emitting buffers and accessing services
-    ///
-    /// # Returns
-    ///
-    /// A vector of output buffers, which may be empty.
-    ///
-    /// # Errors
-    ///
-    /// Returns `PipelineError` if execution fails.
     fn execute(
         &self,
         input: Buffer,
@@ -767,62 +367,6 @@ pub trait Pipeline: Send + Sync + std::any::Any {
     ) -> Result<Vec<Buffer>, PipelineError>;
 
     /// Called during StopPipelineTask to emit final buffers before teardown.
-    ///
-    /// Use this to:
-    /// - Flush accumulated state (e.g., partial windows, aggregations)
-    /// - Emit final summary buffers
-    /// - Output buffered data before shutdown
-    ///
-    /// Flushed buffers are routed to successors through the normal DAG,
-    /// enabling cascading shutdown where data propagates downstream.
-    ///
-    /// # Arguments
-    ///
-    /// * `context` - Execution context for emitting buffers and accessing services
-    ///
-    /// # Default Implementation
-    ///
-    /// Returns empty vector (no flush). Override to provide custom flush logic.
-    ///
-    /// # Errors
-    ///
-    /// Returns `PipelineError` if flushing fails. Errors are logged but do not
-    /// prevent teardown from being called.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use adaptive_engine::pipeline::{Pipeline, Buffer, PipelineId, PipelineError};
-    /// use adaptive_engine::executor::PipelineExecutionContext;
-    /// use adaptive_engine::sequence::SequenceNumber;
-    ///
-    /// struct WindowPipeline {
-    ///     id: PipelineId,
-    ///     // accumulated: Vec<Buffer>,
-    /// }
-    ///
-    /// impl Pipeline for WindowPipeline {
-    ///     fn flush(&self, _context: &dyn PipelineExecutionContext) -> Result<Vec<Buffer>, PipelineError> {
-    ///         // Flush partial window
-    ///         // let data = self.accumulated.drain(..).collect();
-    ///         // Ok(vec![Buffer::new(data, SequenceNumber::new(1))])
-    ///         Ok(vec![])
-    ///     }
-    ///
-    ///     fn execute(
-    ///         &self,
-    ///         input: Buffer,
-    ///         _context: &dyn PipelineExecutionContext
-    ///     ) -> Result<Vec<Buffer>, PipelineError> {
-    ///         // Accumulate buffers
-    ///         Ok(vec![])
-    ///     }
-    ///
-    ///     fn id(&self) -> &PipelineId {
-    ///         &self.id
-    ///     }
-    /// }
-    /// ```
     fn flush(
         &self,
         _context: &dyn crate::executor::PipelineExecutionContext,
@@ -831,55 +375,6 @@ pub trait Pipeline: Send + Sync + std::any::Any {
     }
 
     /// Called once when pipeline is stopped, after all buffers processed.
-    ///
-    /// Use this to:
-    /// - Close connections
-    /// - Free resources
-    /// - Write final state
-    ///
-    /// # Arguments
-    ///
-    /// * `context` - Execution context for accessing services during teardown
-    ///
-    /// # Guarantee
-    ///
-    /// Teardown is ALWAYS called if setup succeeded, even if:
-    /// - Buffers failed during execution
-    /// - Pipeline was stopped mid-stream
-    /// - Errors occurred
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use adaptive_engine::pipeline::{Pipeline, Buffer, PipelineId, PipelineError};
-    /// use adaptive_engine::executor::PipelineExecutionContext;
-    ///
-    /// struct FilePipeline {
-    ///     id: PipelineId,
-    ///     // file: Option<File>,
-    /// }
-    ///
-    /// impl Pipeline for FilePipeline {
-    ///     fn teardown(&self, _context: &dyn PipelineExecutionContext) -> Result<(), PipelineError> {
-    ///         // Close file, flush buffers
-    ///         // self.file.take().map(|f| f.flush());
-    ///         Ok(())
-    ///     }
-    ///
-    ///     fn execute(
-    ///         &self,
-    ///         input: Buffer,
-    ///         _context: &dyn PipelineExecutionContext
-    ///     ) -> Result<Vec<Buffer>, PipelineError> {
-    ///         // Write to file
-    ///         Ok(vec![])
-    ///     }
-    ///
-    ///     fn id(&self) -> &PipelineId {
-    ///         &self.id
-    ///     }
-    /// }
-    /// ```
     fn teardown(
         &self,
         _context: &dyn crate::executor::PipelineExecutionContext,
@@ -888,10 +383,6 @@ pub trait Pipeline: Send + Sync + std::any::Any {
     }
 
     /// Get the unique identifier for this pipeline.
-    ///
-    /// # Returns
-    ///
-    /// A reference to this pipeline's ID.
     fn id(&self) -> &PipelineId;
 }
 
@@ -914,31 +405,16 @@ mod tests {
     #[test]
     fn test_buffer_creation() {
         let data = vec![1, 2, 3, 4, 5];
-        let seq = SequenceNumber::new(1);
-        let buffer = Buffer::new(data.clone(), seq.clone());
+        let buffer = Buffer::new(data.clone());
 
         assert_eq!(buffer.data(), &data);
-        assert_eq!(buffer.sequence(), &seq);
     }
 
     #[test]
-    fn test_buffer_child() {
-        let parent = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
-        let child = parent.child_buffer(vec![4, 5, 6], 1);
-
-        assert_eq!(child.data(), &[4, 5, 6]);
-        assert_eq!(child.sequence().to_string(), "1.1");
-    }
-
-    #[test]
-    fn test_buffer_into_parts() {
-        let data = vec![1, 2, 3];
-        let seq = SequenceNumber::new(1);
-        let buffer = Buffer::new(data.clone(), seq.clone());
-
-        let (extracted_data, extracted_seq) = buffer.into_parts();
-        assert_eq!(extracted_data, data);
-        assert_eq!(extracted_seq, seq);
+    fn test_buffer_clone() {
+        let buffer = Buffer::new(vec![1, 2, 3]);
+        let cloned = buffer.clone();
+        assert_eq!(cloned.data(), &[1, 2, 3]);
     }
 
     struct TestPipeline {
@@ -971,7 +447,7 @@ mod tests {
             id: PipelineId::new("test"),
         };
 
-        let input = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+        let input = Buffer::new(vec![1, 2, 3]);
         let result = pipeline.execute(input, &context).unwrap();
 
         assert_eq!(result.len(), 1);

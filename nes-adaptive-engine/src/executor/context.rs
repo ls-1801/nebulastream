@@ -27,7 +27,6 @@ use std::sync::Arc;
 /// ```no_run
 /// use adaptive_engine::executor::PipelineExecutionContext;
 /// use adaptive_engine::pipeline::{Buffer, PipelineError};
-/// use adaptive_engine::sequence::SequenceNumber;
 ///
 /// fn process_with_context(
 ///     input: Buffer,
@@ -173,8 +172,7 @@ impl PipelineExecutionContext for ExecutorContext {
     }
 
     fn allocate_buffer(&self) -> Result<Buffer, PipelineError> {
-        use crate::sequence::SequenceNumber;
-        Ok(Buffer::new(vec![], SequenceNumber::new(0)))
+        Ok(Buffer::new(vec![]))
     }
 
     fn get_worker_id(&self) -> usize {
@@ -201,7 +199,6 @@ impl PipelineExecutionContext for ExecutorContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sequence::SequenceNumber;
     use std::sync::mpsc::channel;
 
     #[test]
@@ -219,7 +216,7 @@ mod tests {
         let (tx, rx) = channel();
         let context = ExecutorContext::new(PipelineId::new("test"), 0, 1, tx);
 
-        let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+        let buffer = Buffer::new(vec![1, 2, 3]);
         assert!(context.emit_buffer(buffer.clone()));
 
         let (pipeline_id, received_buffer) = rx.recv().unwrap();
@@ -243,7 +240,7 @@ mod tests {
 
         drop(rx);
 
-        let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+        let buffer = Buffer::new(vec![1, 2, 3]);
         assert!(!context.emit_buffer(buffer));
     }
 }

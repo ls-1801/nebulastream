@@ -8,9 +8,11 @@
 #include <chrono>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_map>
 
 namespace adaptive_engine::test {
 
@@ -150,6 +152,17 @@ private:
     std::shared_future<void> stop_future_{stop_promise_.get_future().share()};
     std::shared_future<void> destruction_future_{destruction_promise_.get_future().share()};
 
+    // Per-buffer repeat counter map
+    std::mutex repeat_mutex_;
+    std::unordered_map<void*, uint64_t> repeat_counters_;
+
+public:
+    uint64_t get_and_increment_repeat(void* buffer_addr) {
+        std::lock_guard<std::mutex> lock(repeat_mutex_);
+        return repeat_counters_[buffer_addr]++;
+    }
+
+private:
     // Statistics
     std::atomic<size_t> invocations_{0};
     std::atomic<size_t> stop_calls_{0};
@@ -212,13 +225,10 @@ public:
         // Handle repeat functionality
         size_t max_repeats = controller_->repeat_count.load();
         if (max_repeats > 0) {
-            // Get current repeat count from watermark
-            // (watermark is used as a counter in tests)
-            uint64_t current_repeat = ctx.get_buffer_provider()->get_metadata(input).watermark;
+            // Use the opaque pointer as repeat counter key (stable identity for cloned handles)
+            void* buf_addr = static_cast<void*>(input.opaque);
+            uint64_t current_repeat = controller_->get_and_increment_repeat(buf_addr);
             if (current_repeat < max_repeats) {
-                // Request repeat with incremented counter
-                // Note: We need to modify metadata, but can't do that directly.
-                // For test purposes, we use repeat_task
                 ctx.repeat_task();
                 return;
             }

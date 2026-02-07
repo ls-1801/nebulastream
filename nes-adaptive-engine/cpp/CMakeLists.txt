@@ -22,7 +22,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(Corrosion)
 
 # Import the Rust crate
-corrosion_import_crate(MANIFEST_PATH ${CMAKE_CURRENT_SOURCE_DIR}/../Cargo.toml)
+corrosion_import_crate(MANIFEST_PATH ${CMAKE_CURRENT_SOURCE_DIR}/../Cargo.toml FEATURES cpp-ffi)
 
 # Add C++ sources as INTERFACE - consumers compile them alongside the Rust lib,
 # ensuring FFI callback symbols are available without circular linking.

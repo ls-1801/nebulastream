@@ -69,7 +69,7 @@ protected:
     /// Create an engine with statistics collection enabled.
     /// The stats_queue_ and polling thread are set up automatically.
     std::unique_ptr<Engine> createEngine() {
-        auto engine = Engine::create_with_stats(buffer_provider_.get(), stats_queue_);
+        auto engine = Engine::create_with_stats(static_cast<void*>(buffer_provider_.get()), stats_queue_);
         if (engine && stats_queue_) {
             stats_->start_polling(stats_queue_.get());
         }

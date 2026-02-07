@@ -7,7 +7,6 @@
 //! # Architecture
 //!
 //! The FFI layer consists of:
-//! - `buffer`: Buffer types matching C++ BufferHandle/BufferMetadata
 //! - `engine`: EngineHandle wrapping the Rust Executor
 //! - `callbacks`: C++ callback wrappers for pipeline stages
 //!
@@ -18,12 +17,11 @@
 //! - Buffer handles use reference counting
 //! - Callbacks are `Send + Sync`
 
-pub mod buffer;
+#[cfg(feature = "cpp-ffi")]
 pub mod callbacks;
 pub mod engine;
 
 // Re-export main FFI types
-pub use buffer::{BufferHandle, BufferMetadata};
 pub use engine::EngineHandle;
 
 /// Execution statistics for FFI.
@@ -39,6 +37,7 @@ pub struct ExecutionStats {
     pub avg_latency_ms: f64,
 }
 
+#[cfg(feature = "cpp-ffi")]
 #[cxx::bridge(namespace = "adaptive_engine")]
 #[allow(clippy::module_inception)]
 mod ffi {
@@ -59,11 +58,11 @@ mod ffi {
         /// Create a new engine instance.
         ///
         /// # Arguments
-        /// * `buffer_provider_ptr` - Opaque pointer to C++ BufferProvider
+        /// * `context_ptr` - Opaque context pointer
         ///
         /// # Returns
         /// Box containing the new EngineHandle
-        fn engine_create(buffer_provider_ptr: usize) -> Box<EngineHandle>;
+        fn engine_create(context_ptr: usize) -> Box<EngineHandle>;
 
         /// Start the engine's worker threads.
         ///
@@ -88,11 +87,24 @@ mod ffi {
     }
 }
 
+#[cfg(not(feature = "cpp-ffi"))]
+#[allow(clippy::module_inception)]
+mod ffi {
+    /// Execution statistics returned from the engine (stub when cpp-ffi is disabled).
+    #[derive(Debug, Clone, Default)]
+    pub struct FfiExecutionStats {
+        pub buffers_processed: u64,
+        pub bytes_processed: u64,
+        pub tasks_executed: u64,
+        pub active_queries: u64,
+        pub avg_latency_ms: f64,
+    }
+}
+
 // Re-export FFI functions at module level for CXX bridge
-pub use engine::{
-    engine_create, engine_get_stats, engine_shutdown, engine_start, engine_stop_query,
-    engine_submit_query, QueryId,
-};
+#[cfg(feature = "cpp-ffi")]
+pub use engine::engine_submit_query;
+pub use engine::{engine_create, engine_get_stats, engine_shutdown, engine_start, QueryId};
 
 // Re-export the CXX-generated types
 pub use ffi::FfiExecutionStats;

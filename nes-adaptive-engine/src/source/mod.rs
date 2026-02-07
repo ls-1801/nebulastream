@@ -27,7 +27,6 @@
 //! ```no_run
 //! use adaptive_engine::source::{Source, SourceEmitHandle, SourceError};
 //! use adaptive_engine::pipeline::{PipelineId, Buffer};
-//! use adaptive_engine::sequence::SequenceNumber;
 //! use std::sync::Arc;
 //! use std::sync::atomic::{AtomicBool, Ordering};
 //!
@@ -48,7 +47,7 @@
 //!         std::thread::spawn(move || {
 //!             let mut seq: u64 = 1;
 //!             while !stopped.load(Ordering::Relaxed) {
-//!                 let buffer = Buffer::new(vec![seq as u8], SequenceNumber::new(seq));
+//!                 let buffer = Buffer::new(vec![seq as u8]);
 //!                 if let Err(_) = emit_handle.emit(buffer) {
 //!                     break;
 //!                 }
@@ -234,12 +233,11 @@ pub trait Source: Send + Sync {
 /// ```no_run
 /// use adaptive_engine::source::SourceEmitHandle;
 /// use adaptive_engine::pipeline::Buffer;
-/// use adaptive_engine::sequence::SequenceNumber;
 ///
 /// fn emit_data(handle: SourceEmitHandle) {
 ///     let mut seq: u64 = 1;
 ///     while !handle.should_stop() {
-///         let buffer = Buffer::new(vec![seq as u8], SequenceNumber::new(seq));
+///         let buffer = Buffer::new(vec![seq as u8]);
 ///         if let Err(_) = handle.emit(buffer) {
 ///             break;
 ///         }

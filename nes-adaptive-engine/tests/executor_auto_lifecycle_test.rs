@@ -4,7 +4,6 @@ use adaptive_engine::executor::Executor;
 use adaptive_engine::graph::PipelineGraph;
 use adaptive_engine::pipeline::mocks::{FilterPipeline, SinkPipeline};
 use adaptive_engine::pipeline::{Buffer, Pipeline, PipelineId};
-use adaptive_engine::sequence::SequenceNumber;
 
 #[test]
 fn test_auto_start_on_deploy() {
@@ -28,11 +27,11 @@ fn test_auto_start_on_deploy() {
     assert!(executor.run_one());
 
     // Verify we can emit to both pipelines without manual start
-    let buffer1 = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+    let buffer1 = Buffer::new(vec![1, 2, 3]);
     handle.emit(sink1_id, buffer1).unwrap();
     assert!(executor.run_one());
 
-    let buffer2 = Buffer::new(vec![4, 5, 6], SequenceNumber::new(2));
+    let buffer2 = Buffer::new(vec![4, 5, 6]);
     handle.emit(sink2_id, buffer2).unwrap();
     assert!(executor.run_one());
 }
@@ -67,7 +66,7 @@ fn test_auto_configure_expected_sources_linear() {
     assert!(executor.run_one()); // Process deploy - auto-starts all
 
     // All pipelines should be ready for execution without manual configuration
-    let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+    let buffer = Buffer::new(vec![1, 2, 3]);
     handle.emit(source_id, buffer).unwrap();
     assert!(executor.run_one()); // Process source
 }
@@ -100,11 +99,11 @@ fn test_auto_configure_expected_sources_convergence() {
     assert!(executor.run_one()); // Process deploy - auto-starts all
 
     // Sink should be configured to expect 2 sources
-    let buffer1 = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+    let buffer1 = Buffer::new(vec![1, 2, 3]);
     handle.emit(source1_id.clone(), buffer1).unwrap();
     assert!(executor.run_one());
 
-    let buffer2 = Buffer::new(vec![4, 5, 6], SequenceNumber::new(2));
+    let buffer2 = Buffer::new(vec![4, 5, 6]);
     handle.emit(source2_id.clone(), buffer2).unwrap();
     assert!(executor.run_one());
 
@@ -155,7 +154,7 @@ fn test_auto_configure_expected_sources_diamond() {
     assert!(executor.run_one()); // Process deploy - auto-starts all
 
     // All pipelines should work without manual configuration
-    let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+    let buffer = Buffer::new(vec![1, 2, 3]);
     handle.emit(source_id, buffer).unwrap();
     assert!(executor.run_one());
 }
@@ -206,7 +205,7 @@ fn test_simplified_user_workflow() {
     assert!(executor.run_one());
 
     // Emit - no manual start needed
-    let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+    let buffer = Buffer::new(vec![1, 2, 3]);
     handle.emit(sink_id, buffer).unwrap();
     assert!(executor.run_one());
 
@@ -239,11 +238,11 @@ fn test_partial_setup_failure() {
     assert!(executor.run_one()); // Deploy task - auto-starts both
 
     // Both pipelines should work
-    let buffer1 = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+    let buffer1 = Buffer::new(vec![1, 2, 3]);
     handle.emit(sink1_id, buffer1).unwrap();
     assert!(executor.run_one());
 
-    let buffer2 = Buffer::new(vec![4, 5, 6], SequenceNumber::new(2));
+    let buffer2 = Buffer::new(vec![4, 5, 6]);
     handle.emit(sink2_id, buffer2).unwrap();
     assert!(executor.run_one());
 }

@@ -12,8 +12,7 @@ use adaptive_engine::pipeline::mocks::{
     FilterPipeline, MultibufferPipeline, OccasionalEmissionPipeline, StatefulPipeline,
 };
 use adaptive_engine::pipeline::PipelineId;
-use adaptive_engine::sequence::SequenceNumber;
-use common::{generate_test_buffers, validate_unique_sequences};
+use common::generate_test_buffers;
 
 // Helper function to create a test context
 fn create_test_context() -> ExecutorContext {
@@ -35,7 +34,7 @@ fn test_simple_filter_pipeline() {
     assert_eq!(graph.len(), 1);
 
     let filter = graph.get_pipeline(&PipelineId::new("filter")).unwrap();
-    let buffers = generate_test_buffers(10, 8, 1);
+    let buffers = generate_test_buffers(10, 8);
     let context = create_test_context();
 
     for buffer in buffers {
@@ -55,7 +54,7 @@ fn test_filter_blocks_small_buffers() {
         .expect("Failed to build graph");
 
     let filter = graph.get_pipeline(&PipelineId::new("filter")).unwrap();
-    let buffers = generate_test_buffers(5, 8, 1); // Size 8 < 10
+    let buffers = generate_test_buffers(5, 8); // Size 8 < 10
     let context = create_test_context();
 
     for buffer in buffers {
@@ -75,21 +74,11 @@ fn test_multibuffer_fanout() {
         .expect("Failed to build graph");
 
     let fanout = graph.get_pipeline(&PipelineId::new("fanout")).unwrap();
-    let input = generate_test_buffers(1, 10, 1).into_iter().next().unwrap();
+    let input = generate_test_buffers(1, 10).into_iter().next().unwrap();
     let context = create_test_context();
 
     let outputs = fanout.execute(input, &context).unwrap();
     assert_eq!(outputs.len(), 5);
-
-    // Verify all outputs have correct sequence numbers
-    assert_eq!(outputs[0].sequence().to_string(), "1.1");
-    assert_eq!(outputs[1].sequence().to_string(), "1.2");
-    assert_eq!(outputs[2].sequence().to_string(), "1.3");
-    assert_eq!(outputs[3].sequence().to_string(), "1.4");
-    assert_eq!(outputs[4].sequence().to_string(), "1.5");
-
-    // Verify all sequences are unique
-    assert!(validate_unique_sequences(&outputs));
 }
 
 #[test]
@@ -103,7 +92,7 @@ fn test_occasional_emission() {
         .expect("Failed to build graph");
 
     let window = graph.get_pipeline(&PipelineId::new("window")).unwrap();
-    let buffers = generate_test_buffers(10, 8, 1);
+    let buffers = generate_test_buffers(10, 8);
     let context = create_test_context();
 
     let mut emission_count = 0;
@@ -126,7 +115,7 @@ fn test_stateful_pipeline() {
         .expect("Failed to build graph");
 
     let stateful = graph.get_pipeline(&PipelineId::new("state")).unwrap();
-    let input = generate_test_buffers(1, 10, 1).into_iter().next().unwrap();
+    let input = generate_test_buffers(1, 10).into_iter().next().unwrap();
     let context = create_test_context();
 
     let output = stateful.execute(input, &context).unwrap();
@@ -251,42 +240,4 @@ fn test_nonexistent_pipeline_connection_fails() {
         .build();
 
     assert!(matches!(result, Err(GraphError::PipelineNotFound(_))));
-}
-
-#[test]
-fn test_sequence_number_hierarchy() {
-    let graph = PipelineGraphBuilder::new()
-        .add_pipeline(Box::new(MultibufferPipeline::new(
-            PipelineId::new("fanout1"),
-            2,
-        )))
-        .add_pipeline(Box::new(MultibufferPipeline::new(
-            PipelineId::new("fanout2"),
-            2,
-        )))
-        .connect(PipelineId::new("fanout1"), PipelineId::new("fanout2"))
-        .build()
-        .expect("Failed to build graph");
-
-    let fanout1 = graph.get_pipeline(&PipelineId::new("fanout1")).unwrap();
-    let fanout2 = graph.get_pipeline(&PipelineId::new("fanout2")).unwrap();
-    let context = create_test_context();
-
-    // Start with sequence 1
-    let input = adaptive_engine::pipeline::Buffer::new(vec![1], SequenceNumber::new(1));
-
-    // First fanout: 1 -> [1.1, 1.2]
-    let outputs1 = fanout1.execute(input, &context).unwrap();
-    assert_eq!(outputs1.len(), 2);
-    assert_eq!(outputs1[0].sequence().to_string(), "1.1");
-    assert_eq!(outputs1[1].sequence().to_string(), "1.2");
-
-    // Second fanout on first output: 1.1 -> [1.1.1, 1.1.2]
-    let outputs2 = fanout2.execute(outputs1[0].clone(), &context).unwrap();
-    assert_eq!(outputs2.len(), 2);
-    assert_eq!(outputs2[0].sequence().to_string(), "1.1.1");
-    assert_eq!(outputs2[1].sequence().to_string(), "1.1.2");
-
-    // Verify hierarchy
-    assert_eq!(outputs2[0].sequence().depth(), 3);
 }

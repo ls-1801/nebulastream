@@ -244,7 +244,7 @@ public:
     /// @param provider Buffer provider for wrapping injected data
     TestSource(std::string id,
                std::shared_ptr<TestSourceController> controller,
-               BufferProvider* provider)
+               test::TestBufferProvider* provider)
         : id_(std::move(id))
         , controller_(std::move(controller))
         , provider_(provider) {}
@@ -372,7 +372,7 @@ public:
 private:
     std::string id_;
     std::shared_ptr<TestSourceController> controller_;
-    BufferProvider* provider_;
+    test::TestBufferProvider* provider_;
     bool stop_requested_{false};
 };
 

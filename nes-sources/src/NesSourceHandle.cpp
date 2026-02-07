@@ -37,7 +37,7 @@ namespace
 /// This is allocated on the heap and stored as the opaque pointer in BufferHandle.
 /// Note: This mirrors NesBufferWrapper in nes-runtime but is defined locally to avoid
 /// a circular dependency between nes-sources and nes-runtime.
-struct SourceBufferWrapper
+struct SourceBufferWrapper : adaptive_engine::BufferHandleBase
 {
     TupleBuffer buffer;
     adaptive_engine::BufferMetadata metadata;
@@ -52,6 +52,8 @@ struct SourceBufferWrapper
         metadata.chunk_number = static_cast<uint32_t>(buffer.getChunkNumber().getRawValue());
         metadata.last_chunk = buffer.isLastChunk();
     }
+
+    adaptive_engine::BufferHandleBase* do_clone() override { return new SourceBufferWrapper(buffer); }
 };
 
 }  // namespace

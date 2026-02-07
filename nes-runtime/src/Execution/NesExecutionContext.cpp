@@ -54,12 +54,6 @@ void NesExecutionContext::repeat_task()
     // If no callback is set, the repeat request is silently ignored.
 }
 
-adaptive_engine::BufferHandle NesExecutionContext::allocate_buffer(size_t size)
-{
-    PRECONDITION(bufferProvider_ != nullptr, "Buffer provider is null");
-    return bufferProvider_->allocate(size);
-}
-
 uint32_t NesExecutionContext::get_worker_id() const
 {
     return workerId_;
@@ -68,11 +62,6 @@ uint32_t NesExecutionContext::get_worker_id() const
 uint64_t NesExecutionContext::get_pipeline_id() const
 {
     return pipelineId_;
-}
-
-adaptive_engine::BufferProvider* NesExecutionContext::get_buffer_provider()
-{
-    return bufferProvider_;
 }
 
 void* NesExecutionContext::get_user_data()

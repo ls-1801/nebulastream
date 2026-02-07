@@ -6,14 +6,14 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
-#include <unordered_map>
+#include <set>
 #include <vector>
 
 namespace adaptive_engine::test {
 
 /// Test buffer implementation for C++ tests without NES dependencies.
-/// Stores data in a vector with reference counting for lifecycle management.
-struct TestBuffer {
+/// Inherits BufferHandleBase for provider-free clone/release via virtual dispatch.
+struct TestBuffer : BufferHandleBase {
     std::vector<uint8_t> data;
     BufferMetadata metadata;
     std::atomic<int> ref_count{1};
@@ -27,87 +27,75 @@ struct TestBuffer {
             std::memcpy(data.data(), src, size);
         }
     }
+
+    BufferHandleBase* do_clone() override {
+        ref_count.fetch_add(1);
+        return this;
+    }
+
+    void do_release() override {
+        if (ref_count.fetch_sub(1) == 1) {
+            delete this;
+        }
+    }
 };
 
-/// Test implementation of BufferProvider for C++ tests.
-/// Uses shared_ptr internally for memory management and tracks buffers
-/// in a map for lifecycle verification in tests.
-class TestBufferProvider : public BufferProvider {
+/// Test implementation of buffer management for C++ tests.
+/// Standalone utility (not a BufferProvider subclass). Tracks active
+/// buffers for leak detection in tests.
+class TestBufferProvider {
 public:
     TestBufferProvider() = default;
-    ~TestBufferProvider() override = default;
+    ~TestBufferProvider() = default;
 
     /// Wrap an existing buffer with the provider.
     /// Creates a copy of the data for test isolation.
-    BufferHandle wrap(void* data, size_t size, const BufferMetadata& metadata) override {
-        auto buffer = std::make_shared<TestBuffer>(data, size, metadata);
-        BufferHandle handle{buffer.get()};
+    BufferHandle wrap(void* data, size_t size, const BufferMetadata& metadata) {
+        auto* buffer = new TestBuffer(data, size, metadata);
+        BufferHandle handle{buffer};
 
         std::lock_guard<std::mutex> lock(mutex_);
-        buffers_[buffer.get()] = std::move(buffer);
+        active_buffers_.insert(buffer);
+        buffer->ref_count.store(1);
         return handle;
     }
 
-    /// Release a buffer handle, freeing associated resources.
-    void release(BufferHandle handle) override {
-        auto* ptr = static_cast<TestBuffer*>(handle.opaque);
-        if (ptr == nullptr) {
-            return;
-        }
-
-        // Decrement ref count
-        int old_count = ptr->ref_count.fetch_sub(1);
-        if (old_count == 1) {
-            // Last reference - remove from map
-            std::lock_guard<std::mutex> lock(mutex_);
-            buffers_.erase(ptr);
-        }
-    }
-
     /// Get the data pointer for a buffer.
-    void* get_data(BufferHandle handle) override {
+    void* get_data(BufferHandle handle) {
         auto* buffer = static_cast<TestBuffer*>(handle.opaque);
         return buffer ? buffer->data.data() : nullptr;
     }
 
     /// Get the size of a buffer.
-    size_t get_size(BufferHandle handle) override {
+    size_t get_size(BufferHandle handle) {
         auto* buffer = static_cast<TestBuffer*>(handle.opaque);
         return buffer ? buffer->data.size() : 0;
     }
 
-    /// Get the metadata for a buffer.
-    const BufferMetadata& get_metadata(BufferHandle handle) override {
-        auto* buffer = static_cast<TestBuffer*>(handle.opaque);
-        return buffer->metadata;
-    }
-
     /// Allocate a new buffer of the specified size.
-    BufferHandle allocate(size_t size) override {
+    BufferHandle allocate(size_t size) {
         BufferMetadata empty_metadata{0, 0, 0, 0, 0, false};
-        auto buffer = std::make_shared<TestBuffer>(size, empty_metadata);
-        BufferHandle handle{buffer.get()};
+        auto* buffer = new TestBuffer(size, empty_metadata);
+        BufferHandle handle{buffer};
 
         std::lock_guard<std::mutex> lock(mutex_);
-        buffers_[buffer.get()] = std::move(buffer);
+        active_buffers_.insert(buffer);
         return handle;
     }
 
     // Test utilities
 
     /// Get the number of active buffers (useful for leak detection in tests).
+    /// Note: This checks which tracked buffers still have ref_count > 0.
     size_t active_buffer_count() const {
         std::lock_guard<std::mutex> lock(mutex_);
-        return buffers_.size();
-    }
-
-    /// Increment the reference count on a buffer handle.
-    /// Used when passing buffers to multiple consumers.
-    void add_ref(BufferHandle handle) {
-        auto* buffer = static_cast<TestBuffer*>(handle.opaque);
-        if (buffer != nullptr) {
-            buffer->ref_count.fetch_add(1);
+        size_t count = 0;
+        for (auto* buf : active_buffers_) {
+            if (buf->ref_count.load() > 0) {
+                ++count;
+            }
         }
+        return count;
     }
 
     /// Get the reference count of a buffer (for test assertions).
@@ -118,7 +106,7 @@ public:
 
 private:
     mutable std::mutex mutex_;
-    std::unordered_map<TestBuffer*, std::shared_ptr<TestBuffer>> buffers_;
+    std::set<TestBuffer*> active_buffers_;
 };
 
 }  // namespace adaptive_engine::test

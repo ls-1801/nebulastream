@@ -150,7 +150,7 @@ class QueryPlanBuilder {
 public:
     /// Create a builder with the given buffer provider.
     /// @param provider Buffer provider for creating test sources and sinks
-    explicit QueryPlanBuilder(BufferProvider* provider)
+    explicit QueryPlanBuilder(test::TestBufferProvider* provider)
         : provider_(provider) {}
 
     ~QueryPlanBuilder() = default;
@@ -356,7 +356,7 @@ public:
     }
 
 private:
-    BufferProvider* provider_;
+    test::TestBufferProvider* provider_;
 
     // ID generators (start from 1 to make 0 invalid)
     BuilderSourceId next_source_id_{BuilderSourceId{1}};

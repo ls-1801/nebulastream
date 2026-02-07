@@ -4,7 +4,6 @@ use adaptive_engine::executor::Executor;
 use adaptive_engine::graph::PipelineGraph;
 use adaptive_engine::pipeline::mocks::{FilterPipeline, SinkPipeline};
 use adaptive_engine::pipeline::{Buffer, Pipeline, PipelineId};
-use adaptive_engine::sequence::SequenceNumber;
 use adaptive_engine::source::{GeneratorConfig, GeneratorSource, Source, TestSource};
 use std::sync::Arc;
 use std::thread;
@@ -22,7 +21,7 @@ fn test_single_source_to_sink() {
     let source = GeneratorSource::new(
         PipelineId::new("src"),
         GeneratorConfig::new(Duration::from_millis(5)).with_max_buffers(5),
-        |seq| Buffer::new(vec![seq as u8], SequenceNumber::new(seq)),
+        |seq| Buffer::new(vec![seq as u8]),
     );
     let source_id = source.id().clone();
 
@@ -62,13 +61,13 @@ fn test_multi_source_convergence() {
     let source1 = GeneratorSource::new(
         PipelineId::new("src1"),
         GeneratorConfig::new(Duration::from_millis(5)).with_max_buffers(3),
-        |seq| Buffer::new(vec![1, seq as u8], SequenceNumber::new(seq)),
+        |seq| Buffer::new(vec![1, seq as u8]),
     );
 
     let source2 = GeneratorSource::new(
         PipelineId::new("src2"),
         GeneratorConfig::new(Duration::from_millis(5)).with_max_buffers(3),
-        |seq| Buffer::new(vec![2, seq as u8], SequenceNumber::new(100 + seq)),
+        |seq| Buffer::new(vec![2, seq as u8]),
     );
 
     let source1_id = source1.id().clone();
@@ -112,7 +111,7 @@ fn test_source_pipeline_sink_chain() {
     let source = GeneratorSource::new(
         PipelineId::new("src"),
         GeneratorConfig::new(Duration::from_millis(5)).with_max_buffers(10),
-        |seq| Buffer::new(vec![seq as u8], SequenceNumber::new(seq)),
+        |seq| Buffer::new(vec![seq as u8]),
     );
     let source_id = source.id().clone();
 
@@ -174,7 +173,7 @@ fn test_test_source_controlled_emission() {
 
     // Inject buffers via handle
     for i in 0..5 {
-        let buffer = Buffer::new(vec![i], SequenceNumber::new(i as u64));
+        let buffer = Buffer::new(vec![i]);
         source_handle.inject_buffer(buffer);
         thread::sleep(Duration::from_millis(5));
     }
@@ -207,7 +206,7 @@ fn test_source_starts_after_pipelines_setup() {
     let source = GeneratorSource::new(
         PipelineId::new("src"),
         GeneratorConfig::new(Duration::from_millis(1)).with_max_buffers(3),
-        |seq| Buffer::new(vec![seq as u8], SequenceNumber::new(seq)),
+        |seq| Buffer::new(vec![seq as u8]),
     );
     let source_id = source.id().clone();
 
@@ -244,7 +243,7 @@ fn test_generator_source_respects_max_buffers() {
     let source = GeneratorSource::new(
         PipelineId::new("src"),
         GeneratorConfig::new(Duration::from_millis(5)).with_max_buffers(7),
-        |seq| Buffer::new(vec![seq as u8], SequenceNumber::new(seq)),
+        |seq| Buffer::new(vec![seq as u8]),
     );
     let source_id = source.id().clone();
 
@@ -276,7 +275,7 @@ fn test_sources_identified_correctly() {
     let source1 = GeneratorSource::new(
         PipelineId::new("src1"),
         GeneratorConfig::new(Duration::from_millis(10)),
-        |seq| Buffer::new(vec![seq as u8], SequenceNumber::new(seq)),
+        |seq| Buffer::new(vec![seq as u8]),
     );
 
     let filter = FilterPipeline::new(PipelineId::new("filter"), |_| true);
@@ -308,7 +307,7 @@ fn test_diamond_topology_with_sources() {
     let source = GeneratorSource::new(
         PipelineId::new("src"),
         GeneratorConfig::new(Duration::from_millis(10)).with_max_buffers(3),
-        |seq| Buffer::new(vec![seq as u8], SequenceNumber::new(seq)),
+        |seq| Buffer::new(vec![seq as u8]),
     );
     let source_id = source.id().clone();
 

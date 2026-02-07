@@ -53,7 +53,7 @@ QueryEngine::QueryEngine(
     NES_INFO("Creating QueryEngine with {} worker threads", config_.numWorkerThreads.getValue());
 
     // Create the adaptive engine with statistics collection enabled
-    engine_ = adaptive_engine::Engine::create_with_stats(bufferProvider_.get(), statsQueue_);
+    engine_ = adaptive_engine::Engine::create_with_stats(static_cast<void*>(bufferProvider_.get()), statsQueue_);
 
     // Start the engine's worker threads
     engine_->start();

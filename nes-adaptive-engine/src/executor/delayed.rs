@@ -20,7 +20,7 @@
 
 use super::queue::TaskQueue;
 use super::task::Task;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -45,6 +45,8 @@ pub enum DelayedMessage {
 pub struct DelayedTaskSubmitterHandle {
     /// Channel sender for communicating with the submitter thread
     sender: std::sync::mpsc::Sender<DelayedMessage>,
+    /// Shared shutdown signal to interrupt sleeping delays
+    shutdown_signal: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl DelayedTaskSubmitterHandle {
@@ -71,8 +73,14 @@ impl DelayedTaskSubmitterHandle {
     /// Signal the DelayedTaskSubmitter to shut down.
     ///
     /// This will cause the submitter thread to discard all pending tasks
-    /// and terminate.
+    /// and terminate. Any in-progress delay will be interrupted immediately.
     pub fn shutdown(&self) -> bool {
+        // Signal the condvar to wake up any sleeping delay
+        {
+            let mut guard = self.shutdown_signal.0.lock().unwrap();
+            *guard = true;
+        }
+        self.shutdown_signal.1.notify_all();
         self.sender.send(DelayedMessage::Shutdown).is_ok()
     }
 }
@@ -100,14 +108,19 @@ impl DelayedTaskSubmitter {
     /// A new DelayedTaskSubmitter with a running background thread.
     pub fn new(task_queue: Arc<Mutex<Box<dyn TaskQueue>>>) -> Self {
         let (sender, receiver) = std::sync::mpsc::channel::<DelayedMessage>();
+        let shutdown_signal = Arc::new((Mutex::new(false), Condvar::new()));
+        let shutdown_signal_clone = Arc::clone(&shutdown_signal);
 
         let thread_handle = thread::spawn(move || {
-            Self::run_loop(receiver, task_queue);
+            Self::run_loop(receiver, task_queue, shutdown_signal_clone);
         });
 
         Self {
             thread_handle: Some(thread_handle),
-            handle: DelayedTaskSubmitterHandle { sender },
+            handle: DelayedTaskSubmitterHandle {
+                sender,
+                shutdown_signal,
+            },
         }
     }
 
@@ -125,14 +138,28 @@ impl DelayedTaskSubmitter {
     fn run_loop(
         receiver: std::sync::mpsc::Receiver<DelayedMessage>,
         task_queue: Arc<Mutex<Box<dyn TaskQueue>>>,
+        shutdown_signal: Arc<(Mutex<bool>, Condvar)>,
     ) {
         loop {
             // Wait for a message
             match receiver.recv() {
                 Ok(DelayedMessage::DelayedTask { task, delay_ms }) => {
-                    // Sleep for the specified delay
+                    // Wait for the specified delay, but remain responsive to shutdown
                     if delay_ms > 0 {
-                        thread::sleep(Duration::from_millis(delay_ms));
+                        let (lock, cvar) = &*shutdown_signal;
+                        let guard = lock.lock().unwrap();
+                        // Wait until either the delay expires or shutdown is signaled
+                        let (guard, _) = cvar
+                            .wait_timeout_while(
+                                guard,
+                                Duration::from_millis(delay_ms),
+                                |&mut shutting_down| !shutting_down,
+                            )
+                            .unwrap();
+                        if *guard {
+                            // Shutdown was signaled during the delay - discard task
+                            break;
+                        }
                     }
 
                     // Push the task back into the executor's queue (unboxing)
@@ -200,7 +227,6 @@ mod tests {
     use super::*;
     use crate::executor::queue::FifoQueue;
     use crate::pipeline::{Buffer, PipelineId};
-    use crate::sequence::SequenceNumber;
     use std::time::Instant;
 
     #[test]
@@ -227,7 +253,7 @@ mod tests {
         let task = Task::WorkTask {
             query_id: 0,
             pipeline_id: PipelineId::new("test"),
-            buffer: Buffer::new(vec![1, 2, 3], SequenceNumber::new(1)),
+            buffer: Buffer::new(vec![1, 2, 3]),
         };
         assert!(handle.submit_delayed(task, 0));
 
@@ -257,7 +283,7 @@ mod tests {
         let task = Task::WorkTask {
             query_id: 0,
             pipeline_id: PipelineId::new("test"),
-            buffer: Buffer::new(vec![1, 2, 3], SequenceNumber::new(1)),
+            buffer: Buffer::new(vec![1, 2, 3]),
         };
         assert!(handle.submit_delayed(task, 50));
 
@@ -294,7 +320,7 @@ mod tests {
         let task = Task::WorkTask {
             query_id: 0,
             pipeline_id: PipelineId::new("test"),
-            buffer: Buffer::new(vec![1, 2, 3], SequenceNumber::new(1)),
+            buffer: Buffer::new(vec![1, 2, 3]),
         };
         assert!(handle.submit_delayed(task, 10000)); // 10 second delay
 
@@ -321,12 +347,12 @@ mod tests {
         let task1 = Task::WorkTask {
             query_id: 0,
             pipeline_id: PipelineId::new("test1"),
-            buffer: Buffer::new(vec![1], SequenceNumber::new(1)),
+            buffer: Buffer::new(vec![1]),
         };
         let task2 = Task::WorkTask {
             query_id: 0,
             pipeline_id: PipelineId::new("test2"),
-            buffer: Buffer::new(vec![2], SequenceNumber::new(2)),
+            buffer: Buffer::new(vec![2]),
         };
 
         assert!(handle1.submit_delayed(task1, 0));

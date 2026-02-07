@@ -63,6 +63,7 @@ corrosion_import_crate(
 corrosion_import_crate(
     MANIFEST_PATH ${CMAKE_SOURCE_DIR}/nes-adaptive-engine/Cargo.toml
     CRATE_TYPES staticlib
+    FEATURES cpp-ffi
     FLAGS ${ADDITIONAL_CARGOFLAGS}
 )
 

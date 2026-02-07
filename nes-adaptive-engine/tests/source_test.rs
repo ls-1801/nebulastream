@@ -3,7 +3,6 @@
 use adaptive_engine::graph::PipelineGraph;
 use adaptive_engine::pipeline::mocks::SinkPipeline;
 use adaptive_engine::pipeline::{Buffer, Pipeline, PipelineId};
-use adaptive_engine::sequence::SequenceNumber;
 use adaptive_engine::source::{GeneratorConfig, GeneratorSource, Source, TestSource};
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,7 +21,7 @@ fn test_source_handle_control() {
     assert!(!handle.is_stopped());
 
     // Can inject buffers without starting (they'll be queued)
-    let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+    let buffer = Buffer::new(vec![1, 2, 3]);
     handle.inject_buffer(buffer);
 
     // Can inject error
@@ -46,7 +45,7 @@ fn test_generator_source_config() {
 fn test_generator_source_creation() {
     let config = GeneratorConfig::new(Duration::from_millis(50));
     let source = GeneratorSource::new(PipelineId::new("gen"), config, |seq| {
-        Buffer::new(vec![seq as u8], SequenceNumber::new(seq))
+        Buffer::new(vec![seq as u8])
     });
 
     assert_eq!(source.id().as_str(), "gen");
@@ -62,7 +61,7 @@ fn test_graph_rejects_source_with_predecessors() {
     let source = GeneratorSource::new(
         PipelineId::new("src"),
         GeneratorConfig::new(Duration::from_millis(10)),
-        |seq| Buffer::new(vec![seq as u8], SequenceNumber::new(seq)),
+        |seq| Buffer::new(vec![seq as u8]),
     );
     let source_id = source.id().clone();
 
@@ -92,7 +91,7 @@ fn test_graph_accepts_source_without_predecessors() {
     let source = GeneratorSource::new(
         PipelineId::new("src"),
         GeneratorConfig::new(Duration::from_millis(10)),
-        |seq| Buffer::new(vec![seq as u8], SequenceNumber::new(seq)),
+        |seq| Buffer::new(vec![seq as u8]),
     );
     let source_id = source.id().clone();
 
@@ -117,7 +116,7 @@ fn test_is_source_check() {
     let source = GeneratorSource::new(
         PipelineId::new("src"),
         GeneratorConfig::new(Duration::from_millis(10)),
-        |seq| Buffer::new(vec![seq as u8], SequenceNumber::new(seq)),
+        |seq| Buffer::new(vec![seq as u8]),
     );
     let source_id = source.id().clone();
 
@@ -139,7 +138,7 @@ fn test_get_source_pipeline() {
     let source = GeneratorSource::new(
         PipelineId::new("src"),
         GeneratorConfig::new(Duration::from_millis(10)),
-        |seq| Buffer::new(vec![seq as u8], SequenceNumber::new(seq)),
+        |seq| Buffer::new(vec![seq as u8]),
     );
     let source_id = source.id().clone();
 
@@ -173,7 +172,7 @@ fn test_test_source_lifecycle() {
 fn test_generator_source_lifecycle() {
     let config = GeneratorConfig::new(Duration::from_millis(10));
     let source = GeneratorSource::new(PipelineId::new("gen"), config, |seq| {
-        Buffer::new(vec![seq as u8], SequenceNumber::new(seq))
+        Buffer::new(vec![seq as u8])
     });
 
     // Setup should succeed (default implementation)
@@ -194,13 +193,13 @@ fn test_source_duplicate_id_rejected() {
     let source1 = GeneratorSource::new(
         PipelineId::new("src"),
         GeneratorConfig::new(Duration::from_millis(10)),
-        |seq| Buffer::new(vec![seq as u8], SequenceNumber::new(seq)),
+        |seq| Buffer::new(vec![seq as u8]),
     );
 
     let source2 = GeneratorSource::new(
         PipelineId::new("src"), // Same ID
         GeneratorConfig::new(Duration::from_millis(10)),
-        |seq| Buffer::new(vec![seq as u8], SequenceNumber::new(seq)),
+        |seq| Buffer::new(vec![seq as u8]),
     );
 
     // First add should succeed
@@ -218,13 +217,13 @@ fn test_multiple_sources_in_graph() {
     let source1 = GeneratorSource::new(
         PipelineId::new("src1"),
         GeneratorConfig::new(Duration::from_millis(10)),
-        |seq| Buffer::new(vec![1, seq as u8], SequenceNumber::new(seq)),
+        |seq| Buffer::new(vec![1, seq as u8]),
     );
 
     let source2 = GeneratorSource::new(
         PipelineId::new("src2"),
         GeneratorConfig::new(Duration::from_millis(10)),
-        |seq| Buffer::new(vec![2, seq as u8], SequenceNumber::new(100 + seq)),
+        |seq| Buffer::new(vec![2, seq as u8]),
     );
 
     let sink = SinkPipeline::new("sink");

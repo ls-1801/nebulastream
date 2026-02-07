@@ -5,9 +5,7 @@
 //! implementations to be used with the Rust executor.
 
 use crate::executor::PipelineExecutionContext;
-use crate::ffi::buffer::BufferMetadata;
 use crate::pipeline::{Buffer, OpaqueBufferHandle, Pipeline, PipelineError, PipelineId};
-use crate::sequence::SequenceNumber;
 use crate::source::{Source, SourceEmitHandle, SourceError};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -27,13 +25,13 @@ pub struct CppPipelineStage {
     id: PipelineId,
     /// Opaque pointer to the C++ PipelineStage instance
     stage_ptr: usize,
-    /// Pointer to the C++ BufferProvider
-    buffer_provider_ptr: usize,
+    /// Opaque context pointer (e.g., NesBufferProvider*)
+    context_ptr: usize,
 }
 
 // SAFETY: CppPipelineStage is Send because:
 // - C++ PipelineStage is thread-safe by contract
-// - stage_ptr and buffer_provider_ptr are just usize values
+// - stage_ptr and context_ptr are just usize values
 unsafe impl Send for CppPipelineStage {}
 
 // SAFETY: CppPipelineStage is Sync because:
@@ -47,13 +45,13 @@ impl CppPipelineStage {
     /// # Safety
     /// The caller must ensure:
     /// - `stage_ptr` points to a valid C++ PipelineStage
-    /// - `buffer_provider_ptr` points to a valid C++ BufferProvider
+    /// - `context_ptr` is a valid opaque context pointer
     /// - Both pointers remain valid for the lifetime of this wrapper
-    pub unsafe fn new(id: PipelineId, stage_ptr: usize, buffer_provider_ptr: usize) -> Self {
+    pub unsafe fn new(id: PipelineId, stage_ptr: usize, context_ptr: usize) -> Self {
         Self {
             id,
             stage_ptr,
-            buffer_provider_ptr,
+            context_ptr,
         }
     }
 
@@ -62,15 +60,15 @@ impl CppPipelineStage {
         self.stage_ptr
     }
 
-    /// Get the buffer provider pointer.
-    pub fn buffer_provider_ptr(&self) -> usize {
-        self.buffer_provider_ptr
+    /// Get the context pointer.
+    pub fn context_ptr(&self) -> usize {
+        self.context_ptr
     }
 }
 
 impl Pipeline for CppPipelineStage {
     fn setup(&self, _context: &dyn PipelineExecutionContext) -> Result<(), PipelineError> {
-        let result = unsafe { stage_start(self.stage_ptr, self.buffer_provider_ptr) };
+        let result = unsafe { stage_start(self.stage_ptr, self.context_ptr) };
         if result == 0 {
             Err(PipelineError::ExecutionFailed(
                 "C++ stage start() failed".to_string(),
@@ -85,30 +83,17 @@ impl Pipeline for CppPipelineStage {
         input: Buffer,
         context: &dyn PipelineExecutionContext,
     ) -> Result<Vec<Buffer>, PipelineError> {
-        // If the input buffer carries an opaque handle, pass it directly to
-        // the C++ stage. This preserves child buffers for variable-sized data.
-        let result = if let Some(opaque) = input.opaque_handle() {
-            unsafe {
-                stage_execute_with_handle(self.stage_ptr, self.buffer_provider_ptr, opaque.handle())
-            }
-        } else {
-            let metadata = BufferMetadata::from(&input);
-            // Fallback: pass raw data (no opaque handle available)
-            unsafe {
-                stage_execute(
-                    self.stage_ptr,
-                    self.buffer_provider_ptr,
-                    input.data().as_ptr() as usize,
-                    input.data().len(),
-                    metadata.sequence_number,
-                    metadata.origin_id,
-                    metadata.watermark,
-                    metadata.num_tuples,
-                    metadata.chunk_number,
-                    metadata.last_chunk,
-                )
-            }
-        };
+        // The input buffer must carry an opaque handle for C++ stages.
+        let opaque = input
+            .opaque_handle()
+            .expect("CppPipelineStage::execute requires an opaque buffer handle");
+
+        let result =
+            unsafe { stage_execute_with_handle(self.stage_ptr, self.context_ptr, opaque.handle()) };
+
+        // Drop input to release our claim on the handle. The C++ side has its own
+        // reference if needed (emit_buffer clones on C++ side).
+        drop(input);
 
         if result == 0 {
             return Err(PipelineError::ExecutionFailed(
@@ -121,65 +106,29 @@ impl Pipeline for CppPipelineStage {
             context.repeat_task(0);
         }
 
-        // Collect emitted buffers from C++ thread-local storage
+        // Collect emitted buffers from C++ thread-local storage.
+        // Each emitted handle was independently cloned by FfiExecutionContext::emit_buffer(),
+        // so each one is an independently owned handle — no handle-matching needed.
         let count = unsafe { stage_get_emitted_count() };
         let mut buffers = Vec::with_capacity(count);
 
         for i in 0..count {
-            let data_ptr = unsafe { stage_get_emitted_data_ptr(i) } as *const u8;
-            let data_size = unsafe { stage_get_emitted_data_size(i) };
-
-            let mut seq = 0u64;
-            let mut origin = 0u64;
-            let mut watermark = 0u64;
-            let mut num_tuples = 0u64;
-            let mut chunk_number = 0u32;
-            let mut last_chunk = false;
-
-            unsafe {
-                stage_get_emitted_metadata(
-                    i,
-                    &mut seq,
-                    &mut origin,
-                    &mut watermark,
-                    &mut num_tuples,
-                    &mut chunk_number,
-                    &mut last_chunk,
-                );
+            let emitted_handle = unsafe { stage_get_emitted_opaque_handle(i) };
+            if emitted_handle != 0 {
+                let handle = OpaqueBufferHandle::new(emitted_handle);
+                buffers.push(Buffer::opaque(handle));
             }
-
-            // Copy data from C++ TLS into Rust Vec (needed for Rust executor routing)
-            let data = if data_ptr.is_null() || data_size == 0 {
-                vec![]
-            } else {
-                unsafe { std::slice::from_raw_parts(data_ptr, data_size) }.to_vec()
-            };
-
-            let mut buffer = Buffer::new(data, SequenceNumber::new(seq))
-                .with_origin(origin)
-                .with_watermark(watermark)
-                .with_tuple_count(num_tuples)
-                .with_chunk_info(chunk_number as u64, last_chunk);
-
-            // Attach opaque handle to preserve child buffers for variable-sized data
-            let opaque_handle = unsafe { stage_get_emitted_opaque_handle(i) };
-            if opaque_handle != 0 {
-                buffer = buffer.with_opaque_handle(OpaqueBufferHandle::new(
-                    self.buffer_provider_ptr,
-                    opaque_handle,
-                ));
-            }
-
-            buffers.push(buffer);
         }
 
         Ok(buffers)
     }
 
-    fn teardown(&self, _context: &dyn PipelineExecutionContext) -> Result<(), PipelineError> {
-        // Call C++ stage stop() with repeat_task loop support
+    fn flush(&self, context: &dyn PipelineExecutionContext) -> Result<Vec<Buffer>, PipelineError> {
+        // Call C++ stage stop() which triggers terminate() on windowed operators,
+        // flushing all remaining windows. Collect emitted buffers from TLS just
+        // like execute() does.
         loop {
-            let result = unsafe { stage_stop(self.stage_ptr, self.buffer_provider_ptr) };
+            let result = unsafe { stage_stop(self.stage_ptr, self.context_ptr) };
             if result == 0 {
                 return Err(PipelineError::ExecutionFailed(
                     "C++ stage stop() failed".to_string(),
@@ -188,11 +137,31 @@ impl Pipeline for CppPipelineStage {
 
             // Check if repeat was requested during stop
             if unsafe { stage_get_repeat_requested() } {
-                continue; // Call stop again
+                context.repeat_task(0);
             } else {
                 break;
             }
         }
+
+        // Collect emitted buffers from C++ thread-local storage.
+        // These are the final window results triggered during terminate().
+        let count = unsafe { stage_get_emitted_count() };
+        let mut buffers = Vec::with_capacity(count);
+
+        for i in 0..count {
+            let emitted_handle = unsafe { stage_get_emitted_opaque_handle(i) };
+            if emitted_handle != 0 {
+                let handle = OpaqueBufferHandle::new(emitted_handle);
+                buffers.push(Buffer::opaque(handle));
+            }
+        }
+
+        Ok(buffers)
+    }
+
+    fn teardown(&self, _context: &dyn PipelineExecutionContext) -> Result<(), PipelineError> {
+        // No-op: stage_stop() is already called in flush(), which handles
+        // both the C++ terminate() call and buffer collection.
         Ok(())
     }
 
@@ -220,8 +189,8 @@ pub struct CppSourceHandle {
     id: PipelineId,
     /// Opaque pointer to the C++ SourceHandle instance
     source_ptr: usize,
-    /// Pointer to the C++ BufferProvider
-    buffer_provider_ptr: usize,
+    /// Opaque context pointer (e.g., NesBufferProvider*)
+    context_ptr: usize,
     /// Whether close() has already been called (prevents concurrent/duplicate close).
     closed: AtomicBool,
     /// Mutex to serialize FFI calls (next_buffer vs close).
@@ -238,13 +207,13 @@ impl CppSourceHandle {
     /// # Safety
     /// The caller must ensure:
     /// - `source_ptr` points to a valid C++ SourceHandle
-    /// - `buffer_provider_ptr` points to a valid C++ BufferProvider
+    /// - `context_ptr` is a valid opaque context pointer
     /// - Both pointers remain valid for the lifetime of this wrapper
-    pub unsafe fn new(id: PipelineId, source_ptr: usize, buffer_provider_ptr: usize) -> Self {
+    pub unsafe fn new(id: PipelineId, source_ptr: usize, context_ptr: usize) -> Self {
         Self {
             id,
             source_ptr,
-            buffer_provider_ptr,
+            context_ptr,
             closed: AtomicBool::new(false),
             ffi_mutex: Mutex::new(()),
         }
@@ -257,7 +226,7 @@ impl CppSourceHandle {
 
     /// Open the source.
     pub fn open(&self) -> Result<(), PipelineError> {
-        let result = unsafe { source_open(self.source_ptr, self.buffer_provider_ptr) };
+        let result = unsafe { source_open(self.source_ptr, self.context_ptr) };
         if result == 0 {
             Err(PipelineError::ExecutionFailed(
                 "C++ source open() failed".to_string(),
@@ -269,25 +238,19 @@ impl CppSourceHandle {
 
     /// Get the next buffer from the source.
     ///
-    /// Returns Ok(Some((data, metadata, opaque_handle))) if a buffer is available,
+    /// Returns Ok(Some(handle)) if a buffer is available,
     /// Ok(None) if exhausted (EOS), or Err if an error occurred.
-    /// The opaque handle is preserved so it can be passed to downstream stages,
-    /// preserving child buffers for variable-sized data.
     ///
     /// If close() has been called (from any thread), returns Ok(None) immediately
     /// without calling into C++, avoiding a data race with the C++ close() path.
-    pub fn next_buffer(
-        &self,
-    ) -> Result<Option<(Vec<u8>, BufferMetadata, OpaqueBufferHandle)>, PipelineError> {
+    pub fn next_buffer(&self) -> Result<Option<OpaqueBufferHandle>, PipelineError> {
         // Check if already closed - avoids calling next_buffer() after close()
         // which is a data race on the C++ side (non-atomic `opened_` flag).
-        // This is safe because only the source thread calls next_buffer() and close(),
-        // and teardown() joins the source thread before proceeding.
         if self.closed.load(Ordering::SeqCst) {
             return Ok(None);
         }
 
-        let handle = unsafe { source_next_buffer(self.source_ptr, self.buffer_provider_ptr) };
+        let handle = unsafe { source_next_buffer(self.source_ptr, self.context_ptr) };
         if handle == 0 {
             return Ok(None); // EOS
         }
@@ -297,53 +260,9 @@ impl CppSourceHandle {
             ));
         }
 
-        // Get data from provider
-        let data_ptr =
-            unsafe { buffer_provider_get_data(self.buffer_provider_ptr, handle) } as *const u8;
-        let size = unsafe { buffer_provider_get_size(self.buffer_provider_ptr, handle) };
-
-        // Get metadata from provider
-        let mut seq = 0u64;
-        let mut origin = 0u64;
-        let mut watermark = 0u64;
-        let mut num_tuples = 0u64;
-        let mut chunk_number = 0u32;
-        let mut last_chunk = false;
-
-        unsafe {
-            buffer_provider_get_metadata(
-                self.buffer_provider_ptr,
-                handle,
-                &mut seq,
-                &mut origin,
-                &mut watermark,
-                &mut num_tuples,
-                &mut chunk_number,
-                &mut last_chunk,
-            );
-        }
-
-        // Copy data into Rust Vec (needed for routing/metadata access in executor)
-        let data = if data_ptr.is_null() || size == 0 {
-            vec![]
-        } else {
-            unsafe { std::slice::from_raw_parts(data_ptr, size) }.to_vec()
-        };
-
-        let metadata = BufferMetadata {
-            sequence_number: seq,
-            origin_id: origin,
-            watermark,
-            num_tuples,
-            chunk_number,
-            last_chunk,
-        };
-
-        // Preserve the opaque handle - it will be released when the last
-        // Arc reference is dropped (via OpaqueBufferHandleInner::drop).
-        let opaque = OpaqueBufferHandle::new(self.buffer_provider_ptr, handle);
-
-        Ok(Some((data, metadata, opaque)))
+        // Return the opaque handle directly — no data copy, no metadata extraction.
+        let opaque = OpaqueBufferHandle::new(handle);
+        Ok(Some(opaque))
     }
 
     /// Close the source.
@@ -365,7 +284,7 @@ impl CppSourceHandle {
             return Ok(()); // Already closed by another thread
         }
 
-        let result = unsafe { source_close(self.source_ptr, self.buffer_provider_ptr) };
+        let result = unsafe { source_close(self.source_ptr, self.context_ptr) };
         if result == 0 {
             Err(PipelineError::ExecutionFailed(
                 "C++ source close() failed".to_string(),
@@ -452,14 +371,9 @@ impl Source for CppSourceAdapter {
                 }
 
                 match source_handle.next_buffer() {
-                    Ok(Some((data, metadata, opaque))) => {
-                        let buffer =
-                            Buffer::new(data, SequenceNumber::new(metadata.sequence_number))
-                                .with_origin(metadata.origin_id)
-                                .with_watermark(metadata.watermark)
-                                .with_tuple_count(metadata.num_tuples)
-                                .with_chunk_info(metadata.chunk_number as u64, metadata.last_chunk)
-                                .with_opaque_handle(opaque);
+                    Ok(Some(opaque)) => {
+                        // Wrap the opaque handle directly — no data copy, no metadata.
+                        let buffer = Buffer::opaque(opaque);
 
                         if emit_handle.emit(buffer).is_err() {
                             break SourceOutcome::Stopped;
@@ -537,62 +451,25 @@ impl Source for CppSourceAdapter {
 
 extern "C" {
     // Stage callbacks
-    fn stage_start(stage_ptr: usize, provider_ptr: usize) -> i32;
-    fn stage_execute(
-        stage_ptr: usize,
-        provider_ptr: usize,
-        data_ptr: usize,
-        data_size: usize,
-        sequence_number: u64,
-        origin_id: u64,
-        watermark: u64,
-        num_tuples: u64,
-        chunk_number: u32,
-        last_chunk: bool,
-    ) -> i32;
-    fn stage_execute_with_handle(
-        stage_ptr: usize,
-        provider_ptr: usize,
-        opaque_handle: usize,
-    ) -> i32;
-    fn stage_stop(stage_ptr: usize, provider_ptr: usize) -> i32;
+    fn stage_start(stage_ptr: usize, context_ptr: usize) -> i32;
+    fn stage_execute_with_handle(stage_ptr: usize, context_ptr: usize, opaque_handle: usize)
+        -> i32;
+    fn stage_stop(stage_ptr: usize, context_ptr: usize) -> i32;
 
     // Emitted buffer retrieval (thread-local storage access)
     fn stage_get_emitted_count() -> usize;
-    fn stage_get_emitted_data_ptr(index: usize) -> usize;
-    fn stage_get_emitted_data_size(index: usize) -> usize;
     fn stage_get_emitted_opaque_handle(index: usize) -> usize;
-    fn stage_get_emitted_metadata(
-        index: usize,
-        seq_out: *mut u64,
-        origin_out: *mut u64,
-        watermark_out: *mut u64,
-        num_tuples_out: *mut u64,
-        chunk_number_out: *mut u32,
-        last_chunk_out: *mut bool,
-    );
     fn stage_get_repeat_requested() -> bool;
 
     // Source callbacks
-    fn source_open(source_ptr: usize, provider_ptr: usize) -> i32;
-    fn source_next_buffer(source_ptr: usize, provider_ptr: usize) -> usize;
+    fn source_open(source_ptr: usize, context_ptr: usize) -> i32;
+    fn source_next_buffer(source_ptr: usize, context_ptr: usize) -> usize;
     fn source_request_stop(source_ptr: usize);
-    fn source_close(source_ptr: usize, provider_ptr: usize) -> i32;
+    fn source_close(source_ptr: usize, context_ptr: usize) -> i32;
 
-    // Buffer provider callbacks
-    pub fn buffer_provider_get_data(provider_ptr: usize, handle: usize) -> usize;
-    pub fn buffer_provider_get_size(provider_ptr: usize, handle: usize) -> usize;
-    fn buffer_provider_get_metadata(
-        provider_ptr: usize,
-        handle: usize,
-        seq_out: *mut u64,
-        origin_out: *mut u64,
-        watermark_out: *mut u64,
-        num_tuples_out: *mut u64,
-        chunk_number_out: *mut u32,
-        last_chunk_out: *mut bool,
-    );
-    pub fn buffer_provider_release(provider_ptr: usize, handle: usize);
+    // Buffer handle callbacks (provider-free via virtual dispatch)
+    pub fn buffer_handle_clone(handle: usize) -> usize;
+    pub fn buffer_handle_release(handle: usize);
 
     // Object lifecycle callbacks
     fn source_destroy(source_ptr: usize);

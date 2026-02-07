@@ -33,7 +33,7 @@
 //! handle.deploy_graph(graph).unwrap();
 //!
 //! // Emit buffers - pipelines already started
-//! handle.emit(PipelineId::new("source"), Buffer::new(vec![1, 2, 3], SequenceNumber::new(1))).unwrap();
+//! handle.emit(PipelineId::new("source"), Buffer::new(vec![1, 2, 3])).unwrap();
 //!
 //! // Shutdown - pipelines auto-stop gracefully
 //! handle.shutdown().unwrap();
@@ -268,10 +268,9 @@ impl ExecutorHandle {
     /// ```no_run
     /// # use adaptive_engine::executor::Executor;
     /// # use adaptive_engine::pipeline::{Buffer, PipelineId};
-    /// # use adaptive_engine::sequence::SequenceNumber;
     /// # let mut executor = Executor::new();
     /// # let handle = executor.get_handle();
-    /// let buffer = Buffer::new(vec![1, 2, 3], SequenceNumber::new(1));
+    /// let buffer = Buffer::new(vec![1, 2, 3]);
     /// handle.emit(PipelineId::new("pipeline1"), buffer).unwrap();
     /// ```
     pub fn emit(&self, pipeline_id: PipelineId, buffer: Buffer) -> Result<(), ExecutorError> {
@@ -1020,15 +1019,10 @@ impl Executor {
         self.stats_sender
             .task_execution_start(0, query_id, pipeline_id.clone(), task_id);
 
-        // Clone buffer data and metadata BEFORE execution for repeat support.
-        // We need a snapshot of the buffer to create a repeat task with incremented watermark.
-        let repeat_buffer_data = buffer.data().to_vec();
-        let repeat_buffer_seq = buffer.sequence().clone();
-        let repeat_buffer_origin = buffer.origin_id();
-        let repeat_buffer_watermark = buffer.watermark().unwrap_or(0);
-        let repeat_buffer_tuples = buffer.number_of_tuples();
-        let repeat_buffer_chunk = buffer.chunk_number();
-        let repeat_buffer_last_chunk = buffer.is_last_chunk();
+        // Clone the buffer BEFORE execution for repeat support.
+        // For opaque buffers, clone goes through FFI (buffer_handle_clone).
+        // For owned buffers, clone copies the Vec.
+        let repeat_buffer = buffer.clone();
 
         // Execute the pipeline with context
         match pipeline.execute(buffer, &context) {
@@ -1046,19 +1040,6 @@ impl Executor {
                 // Check if repeat_task was requested during execution
                 if context.was_repeat_requested() {
                     let delay_ms = context.get_repeat_delay_ms();
-
-                    // Create a new buffer with incremented watermark (repeat counter)
-                    let mut repeat_buffer = Buffer::new(repeat_buffer_data, repeat_buffer_seq)
-                        .with_watermark(repeat_buffer_watermark + 1)
-                        .with_tuple_count(repeat_buffer_tuples);
-
-                    if let Some(origin) = repeat_buffer_origin {
-                        repeat_buffer = repeat_buffer.with_origin(origin);
-                    }
-                    if let Some(chunk) = repeat_buffer_chunk {
-                        repeat_buffer =
-                            repeat_buffer.with_chunk_info(chunk, repeat_buffer_last_chunk);
-                    }
 
                     // Create the repeat task with the correct query_id
                     let repeat_task = Task::WorkTask {

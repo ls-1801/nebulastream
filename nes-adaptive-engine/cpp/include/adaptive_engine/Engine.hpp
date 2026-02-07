@@ -85,17 +85,17 @@ class Engine {
 public:
     virtual ~Engine() = default;
 
-    /// Create an engine instance with the given buffer provider
-    /// @param buffer_provider Provider for buffer memory management
+    /// Create an engine instance with the given opaque context
+    /// @param context Opaque pointer controlled by the caller (e.g., NesBufferProvider*)
     /// @return Unique pointer to the created engine
-    static std::unique_ptr<Engine> create(BufferProvider* buffer_provider);
+    static std::unique_ptr<Engine> create(void* context);
 
     /// Create an engine instance with statistics collection enabled
-    /// @param buffer_provider Provider for buffer memory management
+    /// @param context Opaque pointer controlled by the caller (e.g., NesBufferProvider*)
     /// @param out_stats_queue Receives the stats queue for polling events
     /// @return Unique pointer to the created engine
     static std::unique_ptr<Engine> create_with_stats(
-        BufferProvider* buffer_provider,
+        void* context,
         std::unique_ptr<StatsQueue>& out_stats_queue);
 
     /// Start the engine's worker threads

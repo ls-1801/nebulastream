@@ -69,11 +69,6 @@ public:
     /// Used for sources that have more data to produce.
     void repeat_task() override;
 
-    /// Allocate a new buffer using the buffer provider.
-    /// @param size Requested size in bytes
-    /// @return Handle to the newly allocated buffer
-    adaptive_engine::BufferHandle allocate_buffer(size_t size) override;
-
     /// Get the worker ID executing this context.
     /// @return Worker identifier (0-based)
     [[nodiscard]] uint32_t get_worker_id() const override;
@@ -81,10 +76,6 @@ public:
     /// Get the pipeline ID this context belongs to.
     /// @return Pipeline identifier
     [[nodiscard]] uint64_t get_pipeline_id() const override;
-
-    /// Get the buffer provider for this context.
-    /// @return Pointer to the buffer provider
-    adaptive_engine::BufferProvider* get_buffer_provider() override;
 
     /// Get user-defined data associated with this query.
     /// @return Opaque pointer to user data (e.g., OperatorHandlers map)

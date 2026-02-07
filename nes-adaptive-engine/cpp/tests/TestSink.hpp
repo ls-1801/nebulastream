@@ -3,6 +3,7 @@
 #include <adaptive_engine/Buffer.hpp>
 #include <adaptive_engine/ExecutionContext.hpp>
 #include <adaptive_engine/PipelineStage.hpp>
+#include "TestBuffer.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -15,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace adaptive_engine::test {
@@ -204,6 +206,17 @@ private:
     std::condition_variable buffer_cv_;
     std::vector<CapturedBuffer> buffers_;
 
+    // Per-buffer repeat counter map
+    std::mutex repeat_mutex_;
+    std::unordered_map<void*, uint64_t> repeat_counters_;
+
+public:
+    uint64_t get_and_increment_repeat(void* buffer_addr) {
+        std::lock_guard<std::mutex> lock(repeat_mutex_);
+        return repeat_counters_[buffer_addr]++;
+    }
+
+private:
     // Statistics
     std::atomic<size_t> invocations_{0};
     std::atomic<size_t> stop_calls_{0};
@@ -222,7 +235,7 @@ public:
     /// @param provider Buffer provider for accessing buffer data
     TestSink(std::string id,
              std::shared_ptr<TestSinkController> controller,
-             BufferProvider* provider)
+             test::TestBufferProvider* provider)
         : id_(std::move(id))
         , controller_(std::move(controller))
         , provider_(provider) {}
@@ -254,17 +267,15 @@ public:
         // Capture the buffer data
         void* data = provider_->get_data(input);
         size_t size = provider_->get_size(input);
-        const BufferMetadata& metadata = provider_->get_metadata(input);
-        controller_->insert_buffer(CapturedBuffer(data, size, metadata));
+        auto* test_buf = static_cast<test::TestBuffer*>(input.opaque);
+        controller_->insert_buffer(CapturedBuffer(data, size, test_buf->metadata));
 
         // Handle repeat functionality
         size_t max_repeats = controller_->repeat_count.load();
         if (max_repeats > 0) {
-            // Get current repeat count from watermark
-            // (watermark is used as a counter in tests)
-            uint64_t current_repeat = metadata.watermark;
+            void* buf_addr = provider_->get_data(input);
+            uint64_t current_repeat = controller_->get_and_increment_repeat(buf_addr);
             if (current_repeat < max_repeats) {
-                // Request repeat with incremented counter
                 ctx.repeat_task();
             }
         }
@@ -297,7 +308,7 @@ public:
 private:
     std::string id_;
     std::shared_ptr<TestSinkController> controller_;
-    BufferProvider* provider_;
+    test::TestBufferProvider* provider_;
 };
 
 }  // namespace adaptive_engine::test
