@@ -110,9 +110,7 @@ struct ExecutionContext final
     nautilus::val<OriginId> originId; /// Stores the current origin id of the incoming tuple buffer. This is set in the scan.
     nautilus::val<Timestamp> watermarkTs; /// Stores the watermark timestamp of the incoming tuple buffer. This is set in the scan.
     nautilus::val<Timestamp> currentTs; /// Stores the current timestamp. This is set by a time function
-    nautilus::val<SequenceNumber> sequenceNumber; /// Stores the sequence number id of the incoming tuple buffer. This is set in the scan.
-    nautilus::val<ChunkNumber> chunkNumber; /// Stores the chunk number of the incoming tuple buffer. This is set in the scan.
-    nautilus::val<bool> lastChunk;
+    nautilus::val<SequenceRange*> sequenceRangePtr; /// Pointer into the input buffer's control block SequenceRange. Set in the scan.
 
 private:
     std::unordered_map<OperatorId, std::unique_ptr<OperatorState>> localStateMap;

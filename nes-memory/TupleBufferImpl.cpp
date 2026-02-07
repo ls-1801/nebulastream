@@ -252,34 +252,58 @@ void BufferControlBlock::setWatermark(const Timestamp watermark)
     this->watermark = watermark;
 }
 
+const SequenceRange& BufferControlBlock::getSequenceRange() const noexcept
+{
+    return sequenceRange;
+}
+
+void BufferControlBlock::setSequenceRange(SequenceRange range)
+{
+    this->sequenceRange = std::move(range);
+}
+
+SequenceRange* BufferControlBlock::getSequenceRangePtr() noexcept
+{
+    return &sequenceRange;
+}
+
+/// Legacy compatibility shims
 SequenceNumber BufferControlBlock::getSequenceNumber() const noexcept
 {
-    return sequenceNumber;
+    return sequenceRange.start;
 }
 
 void BufferControlBlock::setSequenceNumber(const SequenceNumber sequenceNumber)
 {
-    this->sequenceNumber = sequenceNumber;
+    /// Legacy: setting sequence number N means range [N, N+1) for root-level sequences
+    if (sequenceNumber.isValid())
+    {
+        this->sequenceRange = SequenceRange(sequenceNumber, SequenceNumber(sequenceNumber.root() + 1));
+    }
+    else
+    {
+        this->sequenceRange = SequenceRange();
+    }
 }
 
 ChunkNumber BufferControlBlock::getChunkNumber() const noexcept
 {
-    return chunkNumber;
+    return INITIAL_CHUNK_NUMBER;
 }
 
-void BufferControlBlock::setChunkNumber(const ChunkNumber chunkNumber)
+void BufferControlBlock::setChunkNumber(const ChunkNumber /*chunkNumber*/)
 {
-    this->chunkNumber = chunkNumber;
+    /// No-op: chunk numbers are no longer stored; ranges handle splitting
 }
 
 bool BufferControlBlock::isLastChunk() const noexcept
 {
-    return lastChunk;
+    return sequenceRange.isComplete();
 }
 
-void BufferControlBlock::setLastChunk(const bool lastChunk)
+void BufferControlBlock::setLastChunk(const bool /*lastChunk*/)
 {
-    this->lastChunk = lastChunk;
+    /// No-op: completeness is determined by the range
 }
 
 void BufferControlBlock::setCreationTimestamp(const Timestamp timestamp)

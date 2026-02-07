@@ -134,14 +134,30 @@ Timestamp TupleBuffer::getCreationTimestampInMS() const noexcept
     return controlBlock->getCreationTimestamp();
 }
 
-void TupleBuffer::setSequenceNumber(const SequenceNumber sequenceNumber) noexcept
+void TupleBuffer::setSequenceRange(SequenceRange range) noexcept
 {
-    controlBlock->setSequenceNumber(sequenceNumber);
+    controlBlock->setSequenceRange(std::move(range));
+}
+
+const SequenceRange& TupleBuffer::getSequenceRange() const noexcept
+{
+    return controlBlock->getSequenceRange();
+}
+
+SequenceRange* TupleBuffer::getSequenceRangePtr() noexcept
+{
+    return controlBlock->getSequenceRangePtr();
 }
 
 std::string TupleBuffer::getSequenceDataAsString() const noexcept
 {
-    return fmt::format("SeqNumber: {}, ChunkNumber: {}, LastChunk: {}", getSequenceNumber(), getChunkNumber(), isLastChunk());
+    return fmt::format("SequenceRange: {}", getSequenceRange());
+}
+
+/// Legacy compatibility shims
+void TupleBuffer::setSequenceNumber(const SequenceNumber sequenceNumber) noexcept
+{
+    controlBlock->setSequenceNumber(sequenceNumber);
 }
 
 SequenceNumber TupleBuffer::getSequenceNumber() const noexcept

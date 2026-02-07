@@ -14,21 +14,18 @@
 #include <Sequencing/SequenceData.hpp>
 
 #include <ostream>
-#include <Identifiers/Identifiers.hpp>
+#include <utility>
 
 namespace NES
 {
-SequenceData::SequenceData(SequenceNumber sequenceNumber, ChunkNumber chunkNumber, bool lastChunk)
-    : sequenceNumber(sequenceNumber.getRawValue()), chunkNumber(chunkNumber.getRawValue()), lastChunk(lastChunk)
-{
-}
 
-SequenceData::SequenceData()
-    : sequenceNumber(INVALID_SEQ_NUMBER.getRawValue()), chunkNumber(INVALID_CHUNK_NUMBER.getRawValue()), lastChunk(false) { };
+SequenceData::SequenceData(SequenceRange range) : range(std::move(range)) { }
+
+SequenceData::SequenceData() = default;
 
 std::ostream& operator<<(std::ostream& os, const SequenceData& obj)
 {
-    os << "{SeqNumber: " << obj.sequenceNumber << ", ChunkNumber: " << obj.chunkNumber << ", LastChunk: " << obj.lastChunk << "}";
+    os << "{Range: " << obj.range << "}";
     return os;
 }
 

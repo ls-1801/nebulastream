@@ -56,25 +56,20 @@ SourceThread::SourceThread(
 
 namespace
 {
-void addBufferMetaData(OriginId originId, SequenceNumber sequenceNumber, TupleBuffer& buffer)
+void addBufferMetaData(OriginId originId, size_t sequenceNumber, TupleBuffer& buffer)
 {
     /// set the origin id for this source
     buffer.setOriginId(originId);
     /// set the creation timestamp
     buffer.setCreationTimestampInMS(Timestamp(
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count()));
-    /// Set the sequence number of this buffer.
-    /// A data source generates a monotonic increasing sequence number
-    buffer.setSequenceNumber(sequenceNumber);
-    buffer.setChunkNumber(INITIAL_CHUNK_NUMBER);
-    buffer.setLastChunk(true);
+    /// Set the sequence range for this buffer: [N, N+1)
+    buffer.setSequenceRange(SequenceRange(SequenceNumber(sequenceNumber), SequenceNumber(sequenceNumber + 1)));
     NES_TRACE(
-        "Setting the buffer metadata for source {} with originId={} sequenceNumber={} chunkNumber={} lastChunk={}",
+        "Setting the buffer metadata for source {} with originId={} sequenceRange={}",
         buffer.getOriginId(),
         buffer.getOriginId(),
-        buffer.getSequenceNumber(),
-        buffer.getChunkNumber(),
-        buffer.isLastChunk());
+        buffer.getSequenceRange());
 }
 
 using EmitFn = std::function<void(TupleBuffer&&, bool addBufferMetadata)>;
@@ -146,12 +141,12 @@ void dataSourceThread(
     ///NOLINTNEXTLINE(performance-unnecessary-value-param) `jthread` does not allow references
     std::shared_ptr<AbstractBufferProvider> bufferProvider)
 {
-    size_t sequenceNumberGenerator = SequenceNumber::INITIAL;
+    size_t sequenceNumberGenerator = 1;
     const EmitFn dataEmit = [&](TupleBuffer&& buffer, bool shouldAddMetadata)
     {
         if (shouldAddMetadata)
         {
-            addBufferMetaData(originId, SequenceNumber(sequenceNumberGenerator++), buffer);
+            addBufferMetaData(originId, sequenceNumberGenerator++, buffer);
         }
         emit(originId, SourceReturnType::Data{std::move(buffer)}, stopToken);
     };

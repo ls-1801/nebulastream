@@ -14,26 +14,24 @@
 
 #pragma once
 #include <ostream>
-#include <sstream>
-#include <Identifiers/Identifiers.hpp>
+#include <Sequencing/SequenceNumber.hpp>
 #include <Util/Logger/Formatter.hpp>
 
 namespace NES
 {
 
+/// SequenceData wraps a SequenceRange for buffer tracking.
+/// It provides the root sequence number and completeness information.
 struct SequenceData
 {
-    SequenceData(SequenceNumber sequenceNumber, ChunkNumber chunkNumber, bool lastChunk);
+    explicit SequenceData(SequenceRange range);
     explicit SequenceData();
 
     friend std::ostream& operator<<(std::ostream& os, const SequenceData& obj);
 
-    /// Checks sequenceNumber, then chunkNumber, then lastChunk
     friend auto operator<=>(const SequenceData& lhs, const SequenceData& rhs) = default;
 
-    SequenceNumber::Underlying sequenceNumber;
-    ChunkNumber::Underlying chunkNumber;
-    bool lastChunk;
+    SequenceRange range;
 };
 
 }

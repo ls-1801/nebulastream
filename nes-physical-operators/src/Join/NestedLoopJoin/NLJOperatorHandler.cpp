@@ -77,9 +77,7 @@ void NLJOperatorHandler::emitSlicesToProbe(
     /// As we are here "emitting" a buffer, we have to set the originId, the seq number, and the watermark.
     /// The watermark cannot be the slice end as some buffers might be still waiting to get processed.
     tupleBuffer.setOriginId(outputOriginId);
-    tupleBuffer.setSequenceNumber(SequenceNumber(sequenceData.sequenceNumber));
-    tupleBuffer.setChunkNumber(ChunkNumber(sequenceData.chunkNumber));
-    tupleBuffer.setLastChunk(sequenceData.lastChunk);
+    tupleBuffer.setSequenceRange(sequenceData.range);
     tupleBuffer.setWatermark(windowInfo.windowStart);
     tupleBuffer.setNumberOfTuples(totalNumberOfTuples);
     tupleBuffer.setCreationTimestampInMS(Timestamp(

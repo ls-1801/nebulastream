@@ -31,6 +31,7 @@
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Sequencing/SequenceData.hpp>
+#include <Sequencing/SequenceNumber.hpp>
 #include <Util/Ranges.hpp>
 #include <ErrorHandling.hpp>
 
@@ -133,7 +134,7 @@ inline void writePagedSizeBufferChunkToFile(
 
 inline void writePagedSizeTupleBufferChunkToFile(
     std::span<TupleBuffer> pagedSizeBufferChunk,
-    const SequenceNumber::Underlying sequenceNumber,
+    const size_t sequenceNumber,
     const size_t numTuplesInChunk,
     std::ofstream& appendFile,
     const size_t sizeOfSchemaInBytes,
@@ -144,7 +145,7 @@ inline void writePagedSizeTupleBufferChunkToFile(
         {.numberOfTuples = numTuplesInChunk,
          .numberChildBuffers = numChildBuffers,
          .sequenceNumber = sequenceNumber,
-         .chunkNumber = ChunkNumber::INITIAL},
+         .chunkNumber = 1},
         sizeOfSchemaInBytes,
         pagedSizeBufferChunk,
         appendFile);
@@ -182,8 +183,7 @@ inline void sortTupleBuffers(std::vector<TupleBuffer>& buffers)
         buffers.end(),
         [](const TupleBuffer& left, const TupleBuffer& right)
         {
-            return SequenceData{left.getSequenceNumber(), left.getChunkNumber(), left.isLastChunk()}
-            < SequenceData{right.getSequenceNumber(), right.getChunkNumber(), right.isLastChunk()};
+            return left.getSequenceRange() < right.getSequenceRange();
         });
 }
 
@@ -225,7 +225,7 @@ inline void writeTupleBuffersToFile(
     auto appendFile = createFile(actualResultFilePath, FileOpenMode::APPEND);
 
     size_t nextChunkStart = 0;
-    size_t nextChunkSequenceNumber = SequenceNumber::INITIAL;
+    size_t nextChunkSequenceNumber = 1;
     for (const auto& [lastBufferIdxInChunk, numTuplesInChunk] : pagedSizedChunkOffsets)
     {
         const auto nextChunk = std::span(resultBufferVec).subspan(nextChunkStart, lastBufferIdxInChunk - nextChunkStart);
@@ -308,8 +308,8 @@ inline std::vector<TupleBuffer> loadTupleBuffersFromFile(
                 throw BufferAllocationFailure("Failed to get unpooled buffer");
             }
             parentBuffer.setNumberOfTuples(bufferHeader.numberOfTuples);
-            parentBuffer.setSequenceNumber(SequenceNumber(bufferHeader.sequenceNumber));
-            parentBuffer.setChunkNumber(ChunkNumber(bufferHeader.chunkNumber));
+            parentBuffer.setSequenceRange(
+                SequenceRange(SequenceNumber(bufferHeader.sequenceNumber), SequenceNumber(bufferHeader.sequenceNumber + 1)));
             expectedResultBuffers.at(bufferIdx) = std::move(parentBuffer);
         }
         file.close();

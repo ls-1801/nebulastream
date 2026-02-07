@@ -247,11 +247,7 @@ public:
             resultBufferVec,
             [](const TupleBuffer& left, const TupleBuffer& right)
             {
-                if (left.getSequenceNumber() == right.getSequenceNumber())
-                {
-                    return left.getChunkNumber() < right.getChunkNumber();
-                }
-                return left.getSequenceNumber() < right.getSequenceNumber();
+                return left.getSequenceRange() < right.getSequenceRange();
             });
 
 

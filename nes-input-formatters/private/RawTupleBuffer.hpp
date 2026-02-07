@@ -28,7 +28,7 @@
 namespace NES
 {
 using FieldIndex = uint32_t;
-using SequenceNumberType = SequenceNumber::Underlying;
+using SequenceNumberType = size_t;
 
 /// Takes a tuple buffer containing raw, unformatted data and wraps it into an object that fulfills the following purposes:
 /// 1. The RawTupleBuffer allows its users to operate on string_views, instead of handling raw pointers (which a TupleBuffer would require)

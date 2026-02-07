@@ -14,63 +14,54 @@
 
 #pragma once
 #include <cstddef>
-#include <cstdint>
 #include <map>
 #include <ostream>
 #include <Identifiers/Identifiers.hpp>
-#include <Identifiers/NESStrongType.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/QueryTerminationType.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <Sequencing/SequenceNumber.hpp>
 #include <Util/Logger/Formatter.hpp>
 #include <folly/Synchronized.h>
-
-#ifndef NO_ASSERT
-    #include <set>
-#endif
 
 namespace NES
 {
 
-/// Stores a sequenceNumber and an OriginId
-struct SequenceNumberForOriginId
+/// Key identifying a unique input range per origin
+struct RangeForOriginId
 {
-    SequenceNumber sequenceNumber = INVALID_SEQ_NUMBER;
+    SequenceRange inputRange;
     OriginId originId = INVALID_ORIGIN_ID;
 
-    auto operator<=>(const SequenceNumberForOriginId&) const = default;
+    auto operator<=>(const RangeForOriginId&) const = default;
 
-    friend std::ostream& operator<<(std::ostream& os, const SequenceNumberForOriginId& obj)
+    friend std::ostream& operator<<(std::ostream& os, const RangeForOriginId& obj)
     {
-        return os << "{ seqNumber = " << obj.sequenceNumber << ", originId = " << obj.originId << "}";
+        return os << "{ range = " << obj.inputRange << ", originId = " << obj.originId << "}";
     }
 };
 
-/// Container for storing information, related to the state of a sequence number
-/// the SequenceState is only used inside 'folly::Synchronized' so its members do not need to be atomic themselves
-struct SequenceState
+/// Tracks sub-range assignment for a single input range
+struct RangeState
 {
-    ChunkNumber::Underlying nextChunkNumberCounter = ChunkNumber::INITIAL;
-    ChunkNumber lastChunkNumber = INVALID<ChunkNumber>;
-    size_t seenChunks = 0;
+    size_t nextChild = 1; /// counter for child offsets
 };
 
 class EmitOperatorHandler final : public OperatorHandler
 {
 public:
-    void setChunkNumber(bool isEndOfIncomingChunk, ChunkNumber incomingChunkNumber, bool isIncomingBufferTheLastChunk, TupleBuffer& buffer);
+    /// Assign a sub-range to the output buffer based on the input range.
+    /// @param inputRange pointer to the SequenceRange of the input buffer (from ExecutionContext)
+    /// @param closesChunk true if this is the last buffer emitted for this input range
+    /// @param originId the origin of the buffer
+    /// @param outputBuffer the buffer being emitted, will have its SequenceRange set
+    void assignRange(const SequenceRange* inputRange, bool closesChunk, OriginId originId, TupleBuffer& outputBuffer);
 
     void start(PipelineExecutionContext& pipelineExecutionContext, uint32_t localStateVariableId) override;
     void stop(QueryTerminationType terminationType, PipelineExecutionContext& pipelineExecutionContext) override;
 
-    folly::Synchronized<std::map<SequenceNumberForOriginId, SequenceState>> sequenceStates;
-
-#ifndef NO_ASSERT
-    /// We assume that every tuple of (SequenceNumber, ChunkNumber, OriginId) is unique per query.
-    /// In debug mode we track the completed sequence numbers to catch bugs related to bad sequence/chunk numbers
-    folly::Synchronized<std::set<SequenceNumberForOriginId>> completedSequences;
-#endif
+    folly::Synchronized<std::map<RangeForOriginId, RangeState>> rangeStates;
 };
 }
 
-FMT_OSTREAM(NES::SequenceNumberForOriginId);
+FMT_OSTREAM(NES::RangeForOriginId);

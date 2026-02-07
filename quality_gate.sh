@@ -66,6 +66,7 @@ run_step "systest (full)" timeout 60 \
     --worker.default_query_execution.execution_mode=INTERPRETER \
     --worker.default_query_execution.join_strategy=NESTED_LOOP_JOIN
 
+
 if [ "$FAILED" -ne 0 ]; then
     printf "\n${RED}Quality gate FAILED${NC}\n"
     exit 1

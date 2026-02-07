@@ -86,32 +86,32 @@ void EmitPhysicalOperator::close(ExecutionContext& ctx, RecordBuffer&) const
 
 namespace
 {
-void setChunkNumber(
+void assignRange(
     const ExecutionContext& context,
     OperatorHandlerId operatorHandlerId,
     const nautilus::val<bool>& closesChunk,
-    const nautilus::val<ChunkNumber>& currentChunkNumber,
-    const nautilus::val<bool>& isCurrentBufferTheLastChunk,
+    const nautilus::val<SequenceRange*>& inputRangePtr,
+    const nautilus::val<OriginId>& originId,
     const nautilus::val<TupleBuffer*>& newBuffer)
 {
     nautilus::invoke(
         +[](OperatorHandler* handler,
             bool closesChunk,
-            ChunkNumber currentChunkNumber,
-            bool isCurrentBufferTheLastChunk,
+            SequenceRange* inputRangePtr,
+            OriginId originId,
             TupleBuffer* newBuffer)
         {
             PRECONDITION(handler != nullptr, "Expects a valid handler");
             PRECONDITION(newBuffer != nullptr, "Expects a valid buffer");
-            PRECONDITION(currentChunkNumber != INVALID<ChunkNumber>, "Expects a valid chunkNumber");
+            PRECONDITION(inputRangePtr != nullptr, "Expects a valid input range pointer");
 
-            dynamic_cast<EmitOperatorHandler&>(*handler).setChunkNumber(
-                closesChunk, currentChunkNumber, isCurrentBufferTheLastChunk, *newBuffer);
+            dynamic_cast<EmitOperatorHandler&>(*handler).assignRange(
+                inputRangePtr, closesChunk, originId, *newBuffer);
         },
         context.getGlobalOperatorHandler(operatorHandlerId),
         closesChunk,
-        currentChunkNumber,
-        isCurrentBufferTheLastChunk,
+        inputRangePtr,
+        originId,
         newBuffer);
 }
 }
@@ -125,10 +125,9 @@ void EmitPhysicalOperator::emitRecordBuffer(
     recordBuffer.setNumRecords(numRecords);
     recordBuffer.setWatermarkTs(ctx.watermarkTs);
     recordBuffer.setOriginId(ctx.originId);
-    recordBuffer.setSequenceNumber(ctx.sequenceNumber);
     recordBuffer.setCreationTs(ctx.currentTs);
 
-    setChunkNumber(ctx, operatorHandlerId, potentialLastChunk, ctx.chunkNumber, ctx.lastChunk, recordBuffer.getReference());
+    assignRange(ctx, operatorHandlerId, potentialLastChunk, ctx.sequenceRangePtr, ctx.originId, recordBuffer.getReference());
 
     ctx.emitBuffer(recordBuffer);
 }

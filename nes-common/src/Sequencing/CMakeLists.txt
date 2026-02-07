@@ -11,6 +11,8 @@
 # limitations under the License.
 
 add_source_files(nes-common
+        RangeCompletionTracker.cpp
         SequenceData.cpp
+        SequenceNumber.cpp
 )
 

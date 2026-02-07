@@ -37,15 +37,14 @@ namespace
 void garbageCollectSlicesProxy(
     OperatorHandler* ptrOpHandler,
     const Timestamp watermarkTs,
-    const SequenceNumber sequenceNumber,
-    const ChunkNumber chunkNumber,
-    const bool lastChunk,
+    SequenceRange* sequenceRangePtr,
     const OriginId originId)
 {
     PRECONDITION(ptrOpHandler != nullptr, "opHandler context should not be null!");
+    PRECONDITION(sequenceRangePtr != nullptr, "sequence range pointer should not be null");
 
     const auto* opHandler = dynamic_cast<WindowBasedOperatorHandler*>(ptrOpHandler);
-    const BufferMetaData bufferMetaData(watermarkTs, SequenceData(sequenceNumber, chunkNumber, lastChunk), originId);
+    const BufferMetaData bufferMetaData(watermarkTs, SequenceData(*sequenceRangePtr), originId);
 
     opHandler->garbageCollectSlicesAndWindows(bufferMetaData);
 }
@@ -90,9 +89,7 @@ void WindowProbePhysicalOperator::close(ExecutionContext& executionCtx, RecordBu
         garbageCollectSlicesProxy,
         operatorHandlerMemRef,
         executionCtx.watermarkTs,
-        executionCtx.sequenceNumber,
-        executionCtx.chunkNumber,
-        executionCtx.lastChunk,
+        executionCtx.sequenceRangePtr,
         executionCtx.originId);
 
     /// Now close for all children

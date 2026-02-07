@@ -32,12 +32,13 @@ pub mod ffi {
     }
 
     struct SerializedTupleBufferHeader {
-        sequence_number: u64,
         origin_id: u64,
-        chunk_number: u64,
-        number_of_tuples: u64,
         watermark: u64,
-        last_chunk: bool,
+        number_of_tuples: u64,
+        sequence_range_start_len: u64,
+        sequence_range_start: [u64; 8],
+        sequence_range_end_len: u64,
+        sequence_range_end: [u64; 8],
     }
 
     unsafe extern "C++" {
@@ -292,15 +293,27 @@ fn receive_buffer(
         }
     };
 
+    let mut start_arr = [0u64; 8];
+    let start_len = buffer.sequence_range_start.len().min(8);
+    for (i, &v) in buffer.sequence_range_start.iter().take(8).enumerate() {
+        start_arr[i] = v;
+    }
+    let mut end_arr = [0u64; 8];
+    let end_len = buffer.sequence_range_end.len().min(8);
+    for (i, &v) in buffer.sequence_range_end.iter().take(8).enumerate() {
+        end_arr[i] = v;
+    }
+
     buffer_builder
         .as_mut()
         .setMetadata(&ffi::SerializedTupleBufferHeader {
-            sequence_number: buffer.sequence_number as u64,
             origin_id: buffer.origin_id as u64,
             watermark: buffer.watermark as u64,
-            chunk_number: buffer.chunk_number as u64,
             number_of_tuples: buffer.number_of_tuples as u64,
-            last_chunk: buffer.last_chunk,
+            sequence_range_start_len: start_len as u64,
+            sequence_range_start: start_arr,
+            sequence_range_end_len: end_len as u64,
+            sequence_range_end: end_arr,
         });
 
     buffer_builder.as_mut().setData(&buffer.data);
@@ -354,13 +367,14 @@ fn send_buffer(
     data: &[u8],
     children: &[&[u8]],
 ) -> ffi::SendResult {
+    let start_len = metadata.sequence_range_start_len as usize;
+    let end_len = metadata.sequence_range_end_len as usize;
     let buffer = TupleBuffer {
-        sequence_number: metadata.sequence_number,
+        sequence_range_start: metadata.sequence_range_start[..start_len].to_vec(),
+        sequence_range_end: metadata.sequence_range_end[..end_len].to_vec(),
         origin_id: metadata.origin_id,
-        chunk_number: metadata.chunk_number,
         number_of_tuples: metadata.number_of_tuples,
         watermark: metadata.watermark,
-        last_chunk: metadata.last_chunk,
         data: Vec::from(data),
         child_buffers: children.iter().map(|bytes| Vec::from(*bytes)).collect(),
     };

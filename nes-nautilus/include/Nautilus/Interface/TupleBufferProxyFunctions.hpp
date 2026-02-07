@@ -66,39 +66,14 @@ inline Timestamp NES_Memory_TupleBuffer_getCreationTimestampInMS(const TupleBuff
     return tupleBuffer->getCreationTimestampInMS();
 };
 
-inline void NES_Memory_TupleBuffer_setSequenceNumber(TupleBuffer* tupleBuffer, const SequenceNumber sequenceNumber)
+inline SequenceRange* NES_Memory_TupleBuffer_getSequenceRangePtr(TupleBuffer* tupleBuffer)
 {
-    tupleBuffer->setSequenceNumber(sequenceNumber);
-};
-
-inline SequenceNumber NES_Memory_TupleBuffer_getSequenceNumber(const TupleBuffer* tupleBuffer)
-{
-    return tupleBuffer->getSequenceNumber();
+    return tupleBuffer->getSequenceRangePtr();
 }
 
 inline void NES_Memory_TupleBuffer_setCreationTimestampInMS(TupleBuffer* tupleBuffer, const Timestamp value)
 {
     tupleBuffer->setCreationTimestampInMS(Timestamp(value));
 }
-
-inline void NES_Memory_TupleBuffer_setChunkNumber(TupleBuffer* tupleBuffer, const ChunkNumber chunkNumber)
-{
-    tupleBuffer->setChunkNumber(ChunkNumber(chunkNumber));
-};
-
-inline void NES_Memory_TupleBuffer_setLastChunk(TupleBuffer* tupleBuffer, const bool isLastChunk)
-{
-    tupleBuffer->setLastChunk(isLastChunk);
-};
-
-inline ChunkNumber NES_Memory_TupleBuffer_getChunkNumber(const TupleBuffer* tupleBuffer)
-{
-    return tupleBuffer->getChunkNumber();
-};
-
-inline bool NES_Memory_TupleBuffer_isLastChunk(const TupleBuffer* tupleBuffer)
-{
-    return tupleBuffer->isLastChunk();
-};
 
 }

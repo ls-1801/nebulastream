@@ -17,8 +17,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <Identifiers/Identifiers.hpp>
+#include <Sequencing/SequenceNumber.hpp>
 #include <Time/Timestamp.hpp>
 #include <network/lib.h>
 #include <rust/cxx.h>
@@ -37,10 +39,22 @@ void initSenderService(const std::string& connectionAddr, const NES::WorkerId& w
 
 void TupleBufferBuilder::setMetadata(const SerializedTupleBufferHeader& metaData)
 {
-    buffer.setSequenceNumber(NES::SequenceNumber(metaData.sequence_number));
-    buffer.setChunkNumber(NES::ChunkNumber(metaData.chunk_number));
+    std::vector<size_t> startComponents;
+    for (uint64_t i = 0; i < metaData.sequence_range_start_len; i++)
+    {
+        startComponents.push_back(static_cast<size_t>(metaData.sequence_range_start[i]));
+    }
+    std::vector<size_t> endComponents;
+    for (uint64_t i = 0; i < metaData.sequence_range_end_len; i++)
+    {
+        endComponents.push_back(static_cast<size_t>(metaData.sequence_range_end[i]));
+    }
+
+    NES::SequenceNumber start(std::move(startComponents));
+    NES::SequenceNumber end(std::move(endComponents));
+    buffer.setSequenceRange(NES::SequenceRange(std::move(start), std::move(end)));
+
     buffer.setOriginId(NES::OriginId(metaData.origin_id));
-    buffer.setLastChunk(metaData.last_chunk);
     buffer.setWatermark(NES::Timestamp(metaData.watermark));
     buffer.setNumberOfTuples(metaData.number_of_tuples);
 }

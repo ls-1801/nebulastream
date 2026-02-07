@@ -48,16 +48,8 @@ public:
     nautilus::val<OriginId> getOriginId();
     void setOriginId(const nautilus::val<OriginId>& originId);
 
-    /// Get the sequence number of the underlying tuple buffer. The sequence number is a monotonically increasing identifier for tuple buffers
-    /// from the same origin.
-    nautilus::val<SequenceNumber> getSequenceNumber();
-    void setSequenceNumber(const nautilus::val<SequenceNumber>& seqNumber);
-
-    /// Sets the chunk number of the underlying tuple buffer. The chunk number is a monotonically increasing identifier for chunks of a sequence number.
-    void setChunkNumber(const nautilus::val<ChunkNumber>& chunkNumber);
-    nautilus::val<ChunkNumber> getChunkNumber();
-    void setLastChunk(const nautilus::val<bool>& isLastChunk);
-    nautilus::val<bool> isLastChunk();
+    /// Get a pointer to the SequenceRange stored in the buffer's control block
+    nautilus::val<SequenceRange*> getSequenceRangePtr();
 
     ///  Get the watermark timestamp of the underlying tuple buffer. The watermark timestamp is a point in time that guarantees no records
     ///  with a lower timestamp will be received.

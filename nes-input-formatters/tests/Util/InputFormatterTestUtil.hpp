@@ -28,6 +28,7 @@
 
 #include <DataTypes/Schema.hpp>
 #include <Identifiers/Identifiers.hpp>
+#include <Sequencing/SequenceNumber.hpp>
 #include <MemoryLayout/RowLayout.hpp>
 #include <Pipelines/CompiledExecutablePipelineStage.hpp>
 #include <Runtime/BufferManager.hpp>
@@ -193,11 +194,7 @@ inline void sortTupleBuffers(std::vector<TupleBuffer>& buffers)
         buffers.end(),
         [](const TupleBuffer& left, const TupleBuffer& right)
         {
-            if (left.getSequenceNumber() == right.getSequenceNumber())
-            {
-                return left.getChunkNumber() < right.getChunkNumber();
-            }
-            return left.getSequenceNumber() < right.getSequenceNumber();
+            return left.getSequenceRange() < right.getSequenceRange();
         });
 }
 
@@ -459,8 +456,8 @@ std::vector<TupleBuffer> createTestTupleBuffers(const TestHandle<TupleSchemaTemp
         if (auto tupleBuffer = testHandle.testBufferManager->getBufferNoBlocking())
         {
             copyStringDataToTupleBuffer(rawInputBuffer.rawBytes, tupleBuffer.value());
-            tupleBuffer.value().setSequenceNumber(rawInputBuffer.sequenceNumber);
-            tupleBuffer.value().setChunkNumber(INITIAL_CHUNK_NUMBER);
+            tupleBuffer.value().setSequenceRange(
+                SequenceRange(rawInputBuffer.sequenceNumber, SequenceNumber(rawInputBuffer.sequenceNumber.root() + 1)));
             rawTupleBuffers.emplace_back(tupleBuffer.value());
         }
         else

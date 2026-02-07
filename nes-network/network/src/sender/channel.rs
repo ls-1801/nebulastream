@@ -272,7 +272,7 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> ChannelHandler<R, W> {
         assert!(
             wait_for_ack
                 .insert(
-                    sequence_number,
+                    sequence_number.clone(),
                     pending_writes
                         .pop_front()
                         .expect("BUG: checked value earlier"),

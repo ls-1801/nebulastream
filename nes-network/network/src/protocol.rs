@@ -107,10 +107,11 @@ pub enum DataChannelRequest {
     Close,
 }
 
-/// This represents the per Origin SequenceNumber
-/// It's a triplet of OriginId, SequenceNumber, ChunkNumber
-/// This triplet is assumed to be unique within the context of a single data channel
-pub type OriginSequenceNumber = (u64, u64, u64);
+/// This represents the per Origin SequenceNumber.
+/// It's a pair of OriginId and the sequence range start components.
+/// Each buffer has a unique start, so (origin_id, sequence_range_start)
+/// is assumed to be unique within the context of a single data channel.
+pub type OriginSequenceNumber = (u64, Vec<u64>);
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum DataChannelResponse {
@@ -121,25 +122,26 @@ pub enum DataChannelResponse {
 
 #[derive(Eq, PartialEq, Clone, Serialize, Deserialize)]
 pub struct TupleBuffer {
-    pub sequence_number: u64,
+    /// SequenceRange start as hierarchical components, e.g., [1] for "1", [1, 1] for "1.1"
+    pub sequence_range_start: Vec<u64>,
+    /// SequenceRange end as hierarchical components, e.g., [2] for "2", [1, 1] for "1.1"
+    pub sequence_range_end: Vec<u64>,
     pub origin_id: u64,
     pub watermark: u64,
-    pub chunk_number: u64,
     pub number_of_tuples: u64,
-    pub last_chunk: bool,
     pub data: Vec<u8>,
     pub child_buffers: Vec<Vec<u8>>,
 }
 
 impl TupleBuffer {
     pub fn sequence(&self) -> OriginSequenceNumber {
-        (self.origin_id, self.sequence_number, self.chunk_number)
+        (self.origin_id, self.sequence_range_start.clone())
     }
 }
 
 impl Debug for TupleBuffer {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("TupleBuffer{{ sequence_number: {}, origin_id: {}, chunk_number: {}, watermark: {}, number_of_tuples: {}, bufferSize: {}, children: {:?}}}", self.sequence_number, self.origin_id, self.chunk_number, self.watermark, self.number_of_tuples, self.data.len(), self.child_buffers.iter().map(|buffer| buffer.len()).collect::<Vec<_>>()))
+        f.write_fmt(format_args!("TupleBuffer{{ sequence_range_start: {:?}, sequence_range_end: {:?}, origin_id: {}, watermark: {}, number_of_tuples: {}, bufferSize: {}, children: {:?}}}", self.sequence_range_start, self.sequence_range_end, self.origin_id, self.watermark, self.number_of_tuples, self.data.len(), self.child_buffers.iter().map(|buffer| buffer.len()).collect::<Vec<_>>()))
     }
 }
 

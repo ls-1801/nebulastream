@@ -101,6 +101,11 @@ public:
     void setNumberOfTuples(uint64_t);
     [[nodiscard]] Timestamp getWatermark() const noexcept;
     void setWatermark(Timestamp watermark);
+    [[nodiscard]] const SequenceRange& getSequenceRange() const noexcept;
+    void setSequenceRange(SequenceRange range);
+    [[nodiscard]] SequenceRange* getSequenceRangePtr() noexcept;
+
+    /// Legacy compatibility shims — delegate to SequenceRange
     [[nodiscard]] SequenceNumber getSequenceNumber() const noexcept;
     void setSequenceNumber(SequenceNumber sequenceNumber);
     [[nodiscard]] ChunkNumber getChunkNumber() const noexcept;
@@ -123,9 +128,7 @@ private:
     std::atomic<int32_t> referenceCounter = 0;
     uint32_t numberOfTuples = 0;
     Timestamp watermark = Timestamp(Timestamp::INITIAL_VALUE);
-    SequenceNumber sequenceNumber = INVALID_SEQ_NUMBER;
-    ChunkNumber chunkNumber = INVALID_CHUNK_NUMBER;
-    bool lastChunk = true;
+    SequenceRange sequenceRange; /// default-constructed = invalid
     Timestamp creationTimestamp = Timestamp(Timestamp::INITIAL_VALUE);
     OriginId originId = INVALID_ORIGIN_ID;
     std::vector<MemorySegment*> children;

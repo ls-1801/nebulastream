@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
+#include <map>
 #include <memory>
 #include <random>
 #include <ranges>
@@ -42,6 +43,7 @@
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Sequencing/SequenceData.hpp>
+#include <Sequencing/SequenceNumber.hpp>
 #include <Util/Logger/LogLevel.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <Util/Logger/impl/NesLogger.hpp>
@@ -129,8 +131,7 @@ public:
         Arena arena(bm);
 
         ExecutionContext executionContext{&pec, &arena};
-        executionContext.chunkNumber = buffer.getChunkNumber();
-        executionContext.sequenceNumber = buffer.getSequenceNumber(), executionContext.lastChunk = buffer.isLastChunk();
+        executionContext.sequenceRangePtr = buffer.getSequenceRangePtr();
         executionContext.originId = buffer.getOriginId();
 
         RecordBuffer recordBuffer(std::addressof(buffer));
@@ -147,9 +148,7 @@ public:
 
     void checkBufferAt(
         size_t index,
-        SequenceNumber::Underlying sequence,
-        ChunkNumber::Underlying chunkNumber,
-        bool isLastChunk = false,
+        SequenceRange expectedRange,
         OriginId originId = INITIAL<OriginId>,
         size_t numberOfTuples = 0,
         std::source_location location = std::source_location::current())
@@ -157,66 +156,62 @@ public:
         const testing::ScopedTrace scopedTrace(location.file_name(), static_cast<int>(location.line()), "checkBufferAt");
         ASSERT_GE(buffers.rlock()->size(), index) << fmt::format("Index out of bound when checking buffer at {}", index);
         EXPECT_EQ(buffers.rlock()->at(index).getNumberOfTuples(), numberOfTuples) << fmt::format("Expected {} tuples", numberOfTuples);
-        EXPECT_EQ(buffers.rlock()->at(index).getSequenceNumber(), SequenceNumber(sequence))
-            << fmt::format("Expected Sequence Number {}", sequence);
-        EXPECT_EQ(buffers.rlock()->at(index).getChunkNumber(), ChunkNumber(chunkNumber))
-            << fmt::format("Expected Chunk Number {}", sequence);
-        EXPECT_EQ(buffers.rlock()->at(index).getOriginId(), OriginId(originId)) << fmt::format("Expected Chunk Number {}", sequence);
-        EXPECT_EQ(buffers.rlock()->at(index).isLastChunk(), isLastChunk);
+        EXPECT_EQ(buffers.rlock()->at(index).getSequenceRange(), expectedRange)
+            << fmt::format("Expected SequenceRange {}", expectedRange);
+        EXPECT_EQ(buffers.rlock()->at(index).getOriginId(), OriginId(originId)) << fmt::format("Expected OriginId {}", originId);
     }
 
     void checkForDups(std::source_location location = std::source_location::current())
     {
         const testing::ScopedTrace scopedTrace(location.file_name(), static_cast<int>(location.line()), "checkForDups");
-        auto uniqueSequences = (*buffers.rlock())
+        auto uniqueRanges = (*buffers.rlock())
             | std::views::transform([](const auto& buffer)
-                                    { return SequenceData(buffer.getSequenceNumber(), buffer.getChunkNumber(), buffer.isLastChunk()); })
+                                    { return buffer.getSequenceRange(); })
             | std::ranges::to<std::set>();
 
-        EXPECT_EQ(buffers.rlock()->size(), uniqueSequences.size()) << "Received duplicate sequences";
+        EXPECT_EQ(buffers.rlock()->size(), uniqueRanges.size()) << "Received duplicate sequence ranges";
     }
 
-    void checkLastChunks(std::source_location location = std::source_location::current())
+    /// Checks that for each root sequence number, the emitted sub-ranges form a contiguous
+    /// partition from [N, N+1). This replaces the old chunk-based termination check.
+    void checkRangesComplete(std::source_location location = std::source_location::current())
     {
-        const testing::ScopedTrace scopedTrace(location.file_name(), static_cast<int>(location.line()), "checkForLastChunks");
-        std::unordered_map<SequenceNumber, std::tuple<size_t, ChunkNumber::Underlying, bool, ChunkNumber::Underlying>>
-            sequenceNumberTerminations;
-
+        const testing::ScopedTrace scopedTrace(location.file_name(), static_cast<int>(location.line()), "checkRangesComplete");
+        /// Group ranges by root sequence number
+        std::map<size_t, std::vector<SequenceRange>> rangesByRoot;
         for (const auto& buffer : *buffers.rlock())
         {
-            auto& [seen, maxChunkNumber, termination, terminationAt] = sequenceNumberTerminations[buffer.getSequenceNumber()];
-            seen++;
-            maxChunkNumber = std::max(maxChunkNumber, buffer.getChunkNumber().getRawValue());
-            if (buffer.isLastChunk())
-            {
-                terminationAt = buffer.getChunkNumber().getRawValue();
-            }
-            EXPECT_FALSE(termination && buffer.isLastChunk())
-                << fmt::format("Sequence {} has multiple last chunks", buffer.getSequenceNumber());
-            termination |= buffer.isLastChunk();
+            const auto& range = buffer.getSequenceRange();
+            rangesByRoot[range.rootSequence()].push_back(range);
         }
 
-        for (const auto& [seq, t] : sequenceNumberTerminations)
+        for (auto& [root, ranges] : rangesByRoot)
         {
-            const auto& [seen, max, terminated, terminationAt] = t;
-            EXPECT_TRUE(terminated) << fmt::format("Sequence {} is not terminated", seq);
-            EXPECT_EQ(terminationAt, max) << fmt::format("Sequence {} Non Max Chunk Number has Last Flag", seq);
-            EXPECT_EQ(seen, max) << fmt::format("Sequence {}: The maximum chunk number is {}, but we only saw {} chunks", seq, max, seen);
+            /// Sort ranges by start
+            std::ranges::sort(ranges, [](const SequenceRange& a, const SequenceRange& b) { return a.start < b.start; });
+
+            /// Check that the first range starts at SequenceNumber(root) (or a child thereof)
+            /// and the last range ends at SequenceNumber(root + 1)
+            EXPECT_EQ(ranges.back().end, SequenceNumber(root + 1))
+                << fmt::format("Root sequence {}: last sub-range does not end at {}", root, root + 1);
+
+            /// Check that ranges are contiguous (each range's end == next range's start)
+            for (size_t i = 0; i + 1 < ranges.size(); ++i)
+            {
+                EXPECT_EQ(ranges[i].end, ranges[i + 1].start)
+                    << fmt::format("Root sequence {}: gap between sub-ranges at index {}", root, i);
+            }
         }
     }
 
     TupleBuffer createBuffer(
-        SequenceNumber::Underlying sequence,
-        ChunkNumber::Underlying chunkNumber,
-        bool isLastChunk = false,
+        SequenceRange range,
         OriginId originId = INITIAL<OriginId>,
         size_t numberOfTuples = 0)
     {
         auto buffer = bm->getBufferBlocking();
         buffer.setNumberOfTuples(numberOfTuples);
-        buffer.setLastChunk(isLastChunk);
-        buffer.setChunkNumber(ChunkNumber(chunkNumber));
-        buffer.setSequenceNumber(SequenceNumber(sequence));
+        buffer.setSequenceRange(range);
         buffer.setOriginId(originId);
 
         return buffer;
@@ -235,7 +230,7 @@ public:
 
 TEST_F(EmitPhysicalOperatorTest, BasicTest)
 {
-    auto buffer = createBuffer(SequenceNumber::INITIAL, ChunkNumber::INITIAL, true);
+    auto buffer = createBuffer(SequenceRange(SequenceNumber(1), SequenceNumber(2)));
     EmitPhysicalOperator emit = createUUT();
 
     run(
@@ -246,19 +241,20 @@ TEST_F(EmitPhysicalOperatorTest, BasicTest)
         },
         buffer);
 
-    checkBufferAt(0, SequenceNumber::INITIAL, ChunkNumber::INITIAL, true);
+    checkBufferAt(0, SequenceRange(SequenceNumber(1), SequenceNumber(2)));
     checkForDups();
-    checkLastChunks();
+    checkRangesComplete();
 }
 
 TEST_F(EmitPhysicalOperatorTest, ChunkNumberTest)
 {
+    /// 5 sub-ranges that partition [1, 2): [1, 1.1), [1.1, 1.2), [1.2, 1.3), [1.3, 1.4), [1.4, 2)
     std::vector<TupleBuffer> inputBuffers;
-    inputBuffers.emplace_back(createBuffer(SequenceNumber::INITIAL, ChunkNumber::INITIAL, false));
-    inputBuffers.emplace_back(createBuffer(SequenceNumber::INITIAL, ChunkNumber::INITIAL + 1, false));
-    inputBuffers.emplace_back(createBuffer(SequenceNumber::INITIAL, ChunkNumber::INITIAL + 2, false));
-    inputBuffers.emplace_back(createBuffer(SequenceNumber::INITIAL, ChunkNumber::INITIAL + 3, false));
-    inputBuffers.emplace_back(createBuffer(SequenceNumber::INITIAL, ChunkNumber::INITIAL + 4, true));
+    inputBuffers.emplace_back(createBuffer(SequenceRange(SequenceNumber(1), SequenceNumber({1, 1}))));
+    inputBuffers.emplace_back(createBuffer(SequenceRange(SequenceNumber({1, 1}), SequenceNumber({1, 2}))));
+    inputBuffers.emplace_back(createBuffer(SequenceRange(SequenceNumber({1, 2}), SequenceNumber({1, 3}))));
+    inputBuffers.emplace_back(createBuffer(SequenceRange(SequenceNumber({1, 3}), SequenceNumber({1, 4}))));
+    inputBuffers.emplace_back(createBuffer(SequenceRange(SequenceNumber({1, 4}), SequenceNumber(2))));
 
 
     bool hasMorePermutations = true;
@@ -277,35 +273,36 @@ TEST_F(EmitPhysicalOperatorTest, ChunkNumberTest)
                 buffer);
         }
         checkNumberOfBuffers(5);
-        checkBufferAt(4, SequenceNumber::INITIAL, ChunkNumber::INITIAL + 4, true);
         checkForDups();
-        checkLastChunks();
+        checkRangesComplete();
 
         hasMorePermutations = std::ranges::next_permutation(
                                   inputBuffers,
                                   std::less{},
                                   [](const TupleBuffer& buffer)
-                                  { return SequenceData(buffer.getSequenceNumber(), buffer.getChunkNumber(), buffer.isLastChunk()); })
+                                  { return SequenceData(buffer.getSequenceRange()); })
                                   .found;
     }
 }
 
-/// Tests if all permutations result in a sane ordering of chunk numbers.
-/// This means every sequence number should have the same number of chunks as inserted (albeit in different order) with exactly one chunk
-/// marked as the last chunk, and no duplicates.
+/// Tests if all permutations result in a sane set of sub-ranges.
+/// This means every root sequence number should have contiguous sub-ranges that cover its full range, and no duplicates.
 TEST_F(EmitPhysicalOperatorTest, SequenceChunkNumberTest)
 {
     std::vector<TupleBuffer> inputBuffers;
-    inputBuffers.emplace_back(createBuffer(SequenceNumber::INITIAL, ChunkNumber::INITIAL, false));
-    inputBuffers.emplace_back(createBuffer(SequenceNumber::INITIAL, ChunkNumber::INITIAL + 1, false));
-    inputBuffers.emplace_back(createBuffer(SequenceNumber::INITIAL, ChunkNumber::INITIAL + 2, true));
+    /// Sequence 1: 3 sub-ranges partitioning [1, 2)
+    inputBuffers.emplace_back(createBuffer(SequenceRange(SequenceNumber(1), SequenceNumber({1, 1}))));
+    inputBuffers.emplace_back(createBuffer(SequenceRange(SequenceNumber({1, 1}), SequenceNumber({1, 2}))));
+    inputBuffers.emplace_back(createBuffer(SequenceRange(SequenceNumber({1, 2}), SequenceNumber(2))));
 
-    inputBuffers.emplace_back(createBuffer(SequenceNumber::INITIAL + 1, ChunkNumber::INITIAL, false));
-    inputBuffers.emplace_back(createBuffer(SequenceNumber::INITIAL + 1, ChunkNumber::INITIAL + 1, true));
+    /// Sequence 2: 2 sub-ranges partitioning [2, 3)
+    inputBuffers.emplace_back(createBuffer(SequenceRange(SequenceNumber(2), SequenceNumber({2, 1}))));
+    inputBuffers.emplace_back(createBuffer(SequenceRange(SequenceNumber({2, 1}), SequenceNumber(3))));
 
-    inputBuffers.emplace_back(createBuffer(SequenceNumber::INITIAL + 2, ChunkNumber::INITIAL, false));
-    inputBuffers.emplace_back(createBuffer(SequenceNumber::INITIAL + 2, ChunkNumber::INITIAL + 1, false));
-    inputBuffers.emplace_back(createBuffer(SequenceNumber::INITIAL + 2, ChunkNumber::INITIAL + 2, true));
+    /// Sequence 3: 3 sub-ranges partitioning [3, 4)
+    inputBuffers.emplace_back(createBuffer(SequenceRange(SequenceNumber(3), SequenceNumber({3, 1}))));
+    inputBuffers.emplace_back(createBuffer(SequenceRange(SequenceNumber({3, 1}), SequenceNumber({3, 2}))));
+    inputBuffers.emplace_back(createBuffer(SequenceRange(SequenceNumber({3, 2}), SequenceNumber(4))));
 
     bool hasMorePermutations = true;
     while (hasMorePermutations)
@@ -324,12 +321,12 @@ TEST_F(EmitPhysicalOperatorTest, SequenceChunkNumberTest)
         }
         checkNumberOfBuffers(8);
         checkForDups();
-        checkLastChunks();
+        checkRangesComplete();
         hasMorePermutations = std::ranges::next_permutation(
                                   inputBuffers,
                                   std::less{},
                                   [](const TupleBuffer& buffer)
-                                  { return SequenceData(buffer.getSequenceNumber(), buffer.getChunkNumber(), buffer.isLastChunk()); })
+                                  { return SequenceData(buffer.getSequenceRange()); })
                                   .found;
     };
 }
@@ -343,14 +340,19 @@ TEST_F(EmitPhysicalOperatorTest, ConcurrentSequenceChunkNumberTest)
         std::vector<TupleBuffer> inputBuffers;
         for (size_t seq = 0; seq < numberOfSequences; seq++)
         {
-            std::uniform_int_distribution chunkNumbers(ChunkNumber::INITIAL + 1, maxChunksPerSequence);
-            auto maxChunkForThisSequence = chunkNumbers(rd);
-            for (size_t chunk = 0; chunk < maxChunkForThisSequence - 1; chunk++)
+            auto seqBase = seq + 1;
+            std::uniform_int_distribution<size_t> chunkDist(2, maxChunksPerSequence);
+            auto numChunks = chunkDist(rd);
+            /// Generate sub-ranges partitioning [seqBase, seqBase+1)
+            /// Using child sequence numbers: [seqBase, seqBase.1), [seqBase.1, seqBase.2), ..., [seqBase.(N-1), seqBase+1)
+            for (size_t chunk = 0; chunk < numChunks - 1; chunk++)
             {
-                inputBuffers.emplace_back(createBuffer(SequenceNumber::INITIAL + seq, ChunkNumber::INITIAL + chunk, false));
+                auto subStart = (chunk == 0) ? SequenceNumber(seqBase) : SequenceNumber(seqBase).child(chunk);
+                auto subEnd = SequenceNumber(seqBase).child(chunk + 1);
+                inputBuffers.emplace_back(createBuffer(SequenceRange(subStart, subEnd)));
             }
-            inputBuffers.emplace_back(
-                createBuffer(SequenceNumber::INITIAL + seq, ChunkNumber::INITIAL + maxChunkForThisSequence - 1, true));
+            auto lastStart = SequenceNumber(seqBase).child(numChunks - 1);
+            inputBuffers.emplace_back(createBuffer(SequenceRange(lastStart, SequenceNumber(seqBase + 1))));
         }
 
         EmitPhysicalOperator emit = createUUT();
@@ -381,7 +383,7 @@ TEST_F(EmitPhysicalOperatorTest, ConcurrentSequenceChunkNumberTest)
 
         checkNumberOfBuffers(inputBuffers.size());
         checkForDups();
-        checkLastChunks();
+        checkRangesComplete();
     }
 }
 }

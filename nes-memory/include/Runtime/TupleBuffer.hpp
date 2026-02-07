@@ -153,19 +153,19 @@ public:
     void setWatermark(Timestamp value) noexcept;
 
     [[nodiscard]] Timestamp getCreationTimestampInMS() const noexcept;
-    void setSequenceNumber(SequenceNumber sequenceNumber) noexcept;
+    /// Range-based sequence API
+    void setSequenceRange(SequenceRange range) noexcept;
+    [[nodiscard]] const SequenceRange& getSequenceRange() const noexcept;
+    [[nodiscard]] SequenceRange* getSequenceRangePtr() noexcept;
 
     [[nodiscard]] std::string getSequenceDataAsString() const noexcept;
 
+    /// Legacy compatibility shims — delegate to SequenceRange
+    void setSequenceNumber(SequenceNumber sequenceNumber) noexcept;
     [[nodiscard]] SequenceNumber getSequenceNumber() const noexcept;
-
     void setChunkNumber(ChunkNumber chunkNumber) noexcept;
     [[nodiscard]] ChunkNumber getChunkNumber() const noexcept;
-
-    /// @brief set if this is the last chunk of a sequence number
     void setLastChunk(bool isLastChunk) noexcept;
-
-    /// @brief retrieves if this is the last chunk
     [[nodiscard]] bool isLastChunk() const noexcept;
 
     void setCreationTimestampInMS(Timestamp value) noexcept;

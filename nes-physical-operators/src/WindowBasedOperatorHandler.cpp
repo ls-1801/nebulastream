@@ -64,13 +64,13 @@ WindowSlicesStoreInterface& WindowBasedOperatorHandler::getSliceAndWindowStore()
 void WindowBasedOperatorHandler::garbageCollectSlicesAndWindows(const BufferMetaData& bufferMetaData) const
 {
     const auto newGlobalWaterMarkProbe
-        = watermarkProcessorProbe->updateWatermark(bufferMetaData.watermarkTs, bufferMetaData.seqNumber, bufferMetaData.originId);
+        = watermarkProcessorProbe->updateWatermark(bufferMetaData.watermarkTs, bufferMetaData.seqData, bufferMetaData.originId);
 
     NES_TRACE(
         "New global watermark probe: {} for origin: {} and sequence data: {} and watermarkTs of buffer {}",
         newGlobalWaterMarkProbe,
         bufferMetaData.originId,
-        bufferMetaData.seqNumber,
+        bufferMetaData.seqData,
         bufferMetaData.watermarkTs);
     sliceAndWindowStore->garbageCollectSlicesAndWindows(newGlobalWaterMarkProbe);
 }
@@ -79,13 +79,13 @@ void WindowBasedOperatorHandler::checkAndTriggerWindows(const BufferMetaData& bu
 {
     /// The watermark processor handles the minimal watermark across both streams
     const auto newGlobalWatermark
-        = watermarkProcessorBuild->updateWatermark(bufferMetaData.watermarkTs, bufferMetaData.seqNumber, bufferMetaData.originId);
+        = watermarkProcessorBuild->updateWatermark(bufferMetaData.watermarkTs, bufferMetaData.seqData, bufferMetaData.originId);
 
     NES_TRACE(
         "New global watermark: {} for origin: {} and sequence data: {} and watermarkTs of buffer {}",
         newGlobalWatermark,
         bufferMetaData.originId,
-        bufferMetaData.seqNumber,
+        bufferMetaData.seqData,
         bufferMetaData.watermarkTs);
 
     /// Getting all slices that can be triggered and triggering them

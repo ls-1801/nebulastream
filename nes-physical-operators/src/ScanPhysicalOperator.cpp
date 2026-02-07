@@ -64,9 +64,7 @@ void ScanPhysicalOperator::open(ExecutionContext& executionCtx, RecordBuffer& re
     executionCtx.watermarkTs = recordBuffer.getWatermarkTs();
     executionCtx.originId = recordBuffer.getOriginId();
     executionCtx.currentTs = recordBuffer.getCreatingTs();
-    executionCtx.sequenceNumber = recordBuffer.getSequenceNumber();
-    executionCtx.chunkNumber = recordBuffer.getChunkNumber();
-    executionCtx.lastChunk = recordBuffer.isLastChunk();
+    executionCtx.sequenceRangePtr = recordBuffer.getSequenceRangePtr();
 
     if (isRawScan)
     {

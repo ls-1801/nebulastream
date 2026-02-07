@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <string>
 #include <Identifiers/NESStrongType.hpp>
+#include <Sequencing/SequenceNumber.hpp>
 
 namespace NES
 {
@@ -35,8 +36,7 @@ using InlineSinkId = NESStrongType<uint64_t, struct InlineSinkId_, 0, 1>;
 /// Local Identifiers: These Identifiers are unique in a local scope. E.g. the PipelineId is unique in regard to a single query plan.
 using PipelineId = NESStrongType<uint64_t, struct PipelineId_, 0, 1>;
 using TaskId = NESStrongType<uint64_t, struct TaskId_, 0, 1>;
-using SequenceNumber = NESStrongType<uint64_t, struct SequenceNumber_, 0, 1>;
-using ChunkNumber = NESStrongType<uint64_t, struct ChunkNumber_, SequenceNumber::INVALID, SequenceNumber::INITIAL>;
+using ChunkNumber = NESStrongType<uint64_t, struct ChunkNumber_, 0, 1>;
 
 
 static constexpr LocalQueryId INVALID_LOCAL_QUERY_ID = LocalQueryId(LocalQueryId::INVALID);
@@ -62,8 +62,7 @@ static constexpr TaskId INITIAL_TASK_ID = INITIAL<TaskId>;
 static constexpr ChunkNumber INVALID_CHUNK_NUMBER = INVALID<ChunkNumber>;
 static constexpr ChunkNumber INITIAL_CHUNK_NUMBER = INITIAL<ChunkNumber>;
 
-static constexpr SequenceNumber INVALID_SEQ_NUMBER = INVALID<SequenceNumber>;
-static constexpr SequenceNumber INITIAL_SEQ_NUMBER = INITIAL<SequenceNumber>;
+/// INVALID_SEQ_NUMBER and INITIAL_SEQ_NUMBER are now defined in Sequencing/SequenceNumber.hpp
 
 /// Special overloads for commonly occurring patterns
 /// overload modulo operator for WorkerThreadId as it is commonly use to index into buckets

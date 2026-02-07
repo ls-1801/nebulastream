@@ -151,9 +151,7 @@ void HJOperatorHandler::emitSlicesToProbe(
     /// The watermark cannot be the slice end as some buffers might be still waiting to get processed.
     auto tupleBuffer = tupleBufferVal.value();
     tupleBuffer.setOriginId(outputOriginId);
-    tupleBuffer.setSequenceNumber(SequenceNumber(sequenceData.sequenceNumber));
-    tupleBuffer.setChunkNumber(ChunkNumber(sequenceData.chunkNumber));
-    tupleBuffer.setLastChunk(sequenceData.lastChunk);
+    tupleBuffer.setSequenceRange(sequenceData.range);
     tupleBuffer.setWatermark(windowInfo.windowStart);
     tupleBuffer.setNumberOfTuples(totalNumberOfTuples);
     tupleBuffer.setCreationTimestampInMS(Timestamp(

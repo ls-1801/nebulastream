@@ -18,6 +18,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <utility>
 #include <vector>
 #include <Identifiers/Identifiers.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
@@ -35,18 +36,18 @@ namespace NES
 /// Stores the metadata for a RecordBuffer
 struct BufferMetaData
 {
-    BufferMetaData(const Timestamp watermarkTs, const SequenceData seqNumber, const OriginId originId)
-        : watermarkTs(watermarkTs), seqNumber(seqNumber), originId(originId)
+    BufferMetaData(const Timestamp watermarkTs, SequenceData seqData, const OriginId originId)
+        : watermarkTs(watermarkTs), seqData(std::move(seqData)), originId(originId)
     {
     }
 
     [[nodiscard]] std::string toString() const
     {
-        return fmt::format("BufferMetadata(waterMarkTs: {}, seqNumber: {}, originId: {})", watermarkTs, seqNumber, originId);
+        return fmt::format("BufferMetadata(waterMarkTs: {}, seqData: {}, originId: {})", watermarkTs, seqData, originId);
     }
 
     Timestamp watermarkTs;
-    SequenceData seqNumber;
+    SequenceData seqData;
     OriginId originId;
 };
 

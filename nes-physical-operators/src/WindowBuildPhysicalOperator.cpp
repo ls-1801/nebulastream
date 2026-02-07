@@ -37,16 +37,15 @@ void checkWindowsTriggerProxy(
     OperatorHandler* ptrOpHandler,
     PipelineExecutionContext* pipelineCtx,
     const Timestamp watermarkTs,
-    const SequenceNumber sequenceNumber,
-    const ChunkNumber chunkNumber,
-    const bool lastChunk,
+    SequenceRange* sequenceRangePtr,
     const OriginId originId)
 {
     PRECONDITION(ptrOpHandler != nullptr, "opHandler context should not be null!");
     PRECONDITION(pipelineCtx != nullptr, "pipeline context should not be null");
+    PRECONDITION(sequenceRangePtr != nullptr, "sequence range pointer should not be null");
 
     auto* opHandler = dynamic_cast<WindowBasedOperatorHandler*>(ptrOpHandler);
-    const BufferMetaData bufferMetaData(watermarkTs, SequenceData(sequenceNumber, chunkNumber, lastChunk), originId);
+    const BufferMetaData bufferMetaData(watermarkTs, SequenceData(*sequenceRangePtr), originId);
     opHandler->checkAndTriggerWindows(bufferMetaData, pipelineCtx);
 }
 
@@ -81,9 +80,7 @@ void WindowBuildPhysicalOperator::close(ExecutionContext& executionCtx, RecordBu
         operatorHandlerMemRef,
         executionCtx.pipelineContext,
         executionCtx.watermarkTs,
-        executionCtx.sequenceNumber,
-        executionCtx.chunkNumber,
-        executionCtx.lastChunk,
+        executionCtx.sequenceRangePtr,
         executionCtx.originId);
 }
 

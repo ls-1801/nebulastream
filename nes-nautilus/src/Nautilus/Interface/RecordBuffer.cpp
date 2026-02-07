@@ -61,29 +61,9 @@ void RecordBuffer::setOriginId(const nautilus::val<OriginId>& originId)
     invoke(ProxyFunctions::NES_Memory_TupleBuffer_setOriginId, tupleBufferRef, originId);
 }
 
-void RecordBuffer::setSequenceNumber(const nautilus::val<SequenceNumber>& seqNumber)
+nautilus::val<SequenceRange*> RecordBuffer::getSequenceRangePtr()
 {
-    invoke(ProxyFunctions::NES_Memory_TupleBuffer_setSequenceNumber, tupleBufferRef, seqNumber);
-}
-
-void RecordBuffer::setChunkNumber(const nautilus::val<ChunkNumber>& chunkNumber)
-{
-    invoke(ProxyFunctions::NES_Memory_TupleBuffer_setChunkNumber, tupleBufferRef, chunkNumber);
-}
-
-nautilus::val<ChunkNumber> RecordBuffer::getChunkNumber()
-{
-    return {invoke(ProxyFunctions::NES_Memory_TupleBuffer_getChunkNumber, tupleBufferRef)};
-}
-
-void RecordBuffer::setLastChunk(const nautilus::val<bool>& isLastChunk)
-{
-    invoke(ProxyFunctions::NES_Memory_TupleBuffer_setLastChunk, tupleBufferRef, isLastChunk);
-}
-
-nautilus::val<bool> RecordBuffer::isLastChunk()
-{
-    return {invoke(ProxyFunctions::NES_Memory_TupleBuffer_isLastChunk, tupleBufferRef)};
+    return invoke(ProxyFunctions::NES_Memory_TupleBuffer_getSequenceRangePtr, tupleBufferRef);
 }
 
 nautilus::val<Timestamp> RecordBuffer::getWatermarkTs()
@@ -94,11 +74,6 @@ nautilus::val<Timestamp> RecordBuffer::getWatermarkTs()
 void RecordBuffer::setWatermarkTs(const nautilus::val<Timestamp>& watermarkTs)
 {
     invoke(ProxyFunctions::NES_Memory_TupleBuffer_setWatermark, tupleBufferRef, watermarkTs);
-}
-
-nautilus::val<SequenceNumber> RecordBuffer::getSequenceNumber()
-{
-    return {invoke(ProxyFunctions::NES_Memory_TupleBuffer_getSequenceNumber, tupleBufferRef)};
 }
 
 nautilus::val<Timestamp> RecordBuffer::getCreatingTs()

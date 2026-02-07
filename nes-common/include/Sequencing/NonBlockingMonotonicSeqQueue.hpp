@@ -22,9 +22,10 @@
 #include <cstdint>
 #include <memory>
 #include <Identifiers/Identifiers.hpp>
-#include <Sequencing/ChunkCollector.hpp>
+#include <Sequencing/RangeCompletionTracker.hpp>
 #include <Sequencing/SequenceData.hpp>
 #include <Time/Timestamp.hpp>
+#include <folly/Synchronized.h>
 #include <ErrorHandling.hpp>
 
 namespace NES::Sequencing
@@ -55,7 +56,7 @@ private:
     /// @brief Container, which contains the sequence number and the value.
     struct Container
     {
-        std::atomic<SequenceNumber::Underlying> seq;
+        std::atomic<size_t> seq;
         std::atomic<T> value;
     };
 
@@ -85,17 +86,17 @@ public:
 
     void emplace(SequenceData sequenceData, T newValue)
     {
-        if (auto opt = chunks.collect(sequenceData, Timestamp(newValue)))
+        if (auto opt = rangeTracker_.wlock()->insert(sequenceData.range, Timestamp(newValue)))
         {
-            auto [sequenceNumber, value] = *opt;
+            auto [rootSeq, value] = *opt;
             INVARIANT(
-                sequenceNumber.getRawValue() > currentSeq,
+                rootSeq > currentSeq,
                 "Invalid sequenceNumber: {} has already been seen. Current Sequence: {}",
-                sequenceNumber,
+                rootSeq,
                 currentSeq);
             /// First emplace the value to the specific block of the sequenceNumber.
             /// After this call it is safe to assume that a block, which contains the sequenceNumber exists.
-            emplaceValueInBlock(sequenceNumber.getRawValue(), value.getRawValue());
+            emplaceValueInBlock(rootSeq, value.getRawValue());
             /// Try to shift the current sequence number
             shiftCurrentValue();
         }
@@ -126,7 +127,7 @@ private:
     ///
     /// @param seq the sequence number of the value
     /// @param value the value that should be stored.
-    void emplaceValueInBlock(SequenceNumber::Underlying seq, T value)
+    void emplaceValueInBlock(size_t seq, T value)
     {
         /// Each block contains blockSize elements and covers sequence numbers from
         /// [blockIndex * blockSize] till [blockIndex * blockSize + blockSize]
@@ -247,8 +248,8 @@ private:
     /// Stores a reference to the current block
     std::shared_ptr<Block> head;
     /// Stores the current sequence number
-    std::atomic<SequenceNumber::Underlying> currentSeq;
-    ChunkCollector<BlockSize> chunks;
+    std::atomic<size_t> currentSeq;
+    folly::Synchronized<RangeCompletionTracker> rangeTracker_;
 };
 
 }

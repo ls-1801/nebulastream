@@ -36,7 +36,7 @@
 namespace NES
 {
 DefaultTimeBasedSliceStore::DefaultTimeBasedSliceStore(const uint64_t windowSize, const uint64_t windowSlide)
-    : sliceAssigner(windowSize, windowSlide), sequenceNumber(SequenceNumber::INITIAL), numberOfActiveInputPipelines(0)
+    : sliceAssigner(windowSize, windowSlide), sequenceNumber(1), numberOfActiveInputPipelines(0)
 {
 }
 

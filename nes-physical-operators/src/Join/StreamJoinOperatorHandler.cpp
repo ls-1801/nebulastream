@@ -21,6 +21,7 @@
 #include <vector>
 #include <Identifiers/Identifiers.hpp>
 #include <Sequencing/SequenceData.hpp>
+#include <Sequencing/SequenceNumber.hpp>
 #include <SliceStore/Slice.hpp>
 #include <SliceStore/WindowSlicesStoreInterface.hpp>
 #include <PipelineExecutionContext.hpp>
@@ -44,15 +45,19 @@ void StreamJoinOperatorHandler::triggerSlices(
     /// combinations of slices for a given window to ensure that it has seen all tuples of the window.
     for (const auto& [windowInfo, allSlices] : slicesAndWindowInfo)
     {
-        ChunkNumber::Underlying chunkNumber = ChunkNumber::INITIAL;
+        const auto totalChunks = allSlices.size() * allSlices.size();
+        size_t chunkIndex = 0;
+        const auto rootSeq = windowInfo.sequenceNumber;
         for (const auto& sliceLeft : allSlices)
         {
             for (const auto& sliceRight : allSlices)
             {
-                const bool isLastChunk = chunkNumber == (allSlices.size() * allSlices.size());
-                const SequenceData sequenceData{windowInfo.sequenceNumber, ChunkNumber(chunkNumber), isLastChunk};
+                const bool isLastChunk = (chunkIndex + 1) == totalChunks;
+                const auto rangeStart = (chunkIndex == 0) ? rootSeq : rootSeq.child(chunkIndex);
+                const auto rangeEnd = isLastChunk ? SequenceNumber(rootSeq.root() + 1) : rootSeq.child(chunkIndex + 1);
+                const SequenceData sequenceData{SequenceRange(rangeStart, rangeEnd)};
                 emitSlicesToProbe(*sliceLeft, *sliceRight, windowInfo.windowInfo, sequenceData, pipelineCtx);
-                ++chunkNumber;
+                ++chunkIndex;
             }
         }
     }

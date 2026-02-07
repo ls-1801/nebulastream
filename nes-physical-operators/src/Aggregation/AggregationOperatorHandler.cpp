@@ -29,6 +29,7 @@
 #include <Nautilus/Interface/HashMap/ChainedHashMap/ChainedHashMap.hpp>
 #include <Nautilus/Interface/HashMap/HashMap.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <Sequencing/SequenceNumber.hpp>
 #include <SliceStore/Slice.hpp>
 #include <SliceStore/WindowSlicesStoreInterface.hpp>
 #include <Util/Logger/Logger.hpp>
@@ -117,9 +118,7 @@ void AggregationOperatorHandler::triggerSlices(
         /// As we are here "emitting" a buffer, we have to set the originId, the seq number, the watermark and the "number of tuples".
         /// The watermark cannot be the slice end as some buffers might be still waiting to get processed.
         tupleBuffer.setOriginId(outputOriginId);
-        tupleBuffer.setSequenceNumber(windowInfo.sequenceNumber);
-        tupleBuffer.setChunkNumber(ChunkNumber(ChunkNumber::INITIAL));
-        tupleBuffer.setLastChunk(true);
+        tupleBuffer.setSequenceRange(SequenceRange(windowInfo.sequenceNumber, SequenceNumber(windowInfo.sequenceNumber.root() + 1)));
         tupleBuffer.setWatermark(windowInfo.windowInfo.windowStart);
         tupleBuffer.setNumberOfTuples(totalNumberOfTuples);
         tupleBuffer.setCreationTimestampInMS(Timestamp(

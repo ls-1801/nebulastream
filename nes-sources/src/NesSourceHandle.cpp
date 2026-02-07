@@ -78,13 +78,12 @@ std::optional<TupleBuffer> NesSourceHandle::nextBuffer(NesStageContext& /*ctx*/)
     if (requiresMetadata)
     {
         buffer->setOriginId(originId_);
-        buffer->setSequenceNumber(SequenceNumber(sequenceNumber_.fetch_add(1)));
+        const auto seqNum = sequenceNumber_.fetch_add(1);
+        buffer->setSequenceRange(SequenceRange(SequenceNumber(seqNum), SequenceNumber(seqNum + 1)));
         buffer->setCreationTimestampInMS(Timestamp(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::high_resolution_clock::now().time_since_epoch())
                 .count()));
-        buffer->setChunkNumber(INITIAL_CHUNK_NUMBER);
-        buffer->setLastChunk(true);
     }
 
     // Set the number of bytes read (Source uses this to communicate size)
