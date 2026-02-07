@@ -47,6 +47,12 @@ nes-asp/data/*.csv
 
 scripts/__pycache__
 
+# Adaptive engine build artifacts
+nes-adaptive-engine/build-ae*/
+nes-adaptive-engine/target/
+nes-adaptive-engine/cpp/build/
+nes-adaptive-engine/_bmad*/
+
 # Ignore nix symlinks
 .nix/clang
 .nix/clang++

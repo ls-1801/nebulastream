@@ -24,7 +24,6 @@ add_library(nes-runtime ${NES_EXECUTION_ENGINE_SOURCE_FILES})
 target_link_libraries(nes-runtime PUBLIC nes-common nes-logical-operators nes-physical-operators nes-data-types nes-memory nes-nautilus nes-sources adaptive_engine)
 target_include_directories(nes-runtime PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../cpp/include>
         $<INSTALL_INTERFACE:include/nebulastream/>)
 
 # folly

@@ -116,9 +116,6 @@ include(cmake/UseCCache.cmake)
 include(cmake/UseMold.cmake)
 include(cmake/EnableRust.cmake)
 
-# Add adaptive-engine C++ wrapper library
-# The adaptive-engine directory is at the parent level (sibling to nebulastream)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../cpp ${CMAKE_BINARY_DIR}/adaptive_engine)
 
 if (ENABLE_IWYU)
     find_program(iwyu_path NAMES include-what-you-use iwyu)

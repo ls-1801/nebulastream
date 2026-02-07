@@ -15,7 +15,6 @@ get_source(nes-executable NES_EXECUTABLE_SOURCE_FILES)
 add_library(nes-executable ${NES_EXECUTABLE_SOURCE_FILES})
 target_include_directories(nes-executable PUBLIC
     include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../cpp/include
     PRIVATE .
 )
 target_link_libraries(nes-executable PUBLIC nes-common nes-runtime adaptive_engine)

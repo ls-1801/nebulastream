@@ -1,0 +1,347 @@
+//! Delayed task submitter for handling repeat_task functionality.
+//!
+//! The `DelayedTaskSubmitter` manages delayed task resubmission in a separate
+//! thread. When a pipeline calls `repeat_task(delay_ms)`, the current task is
+//! sent to this thread which sleeps for the specified delay and then pushes
+//! the task back into the executor's task queue.
+//!
+//! # Threading Model
+//!
+//! The DelayedTaskSubmitter runs in its own thread, separate from the executor
+//! thread. It receives delayed tasks via a channel and maintains its own sleep
+//! loop for each task.
+//!
+//! # Shutdown Behavior
+//!
+//! On shutdown, the DelayedTaskSubmitter:
+//! 1. Receives a shutdown signal via its channel
+//! 2. Discards all pending delayed tasks (they won't be resubmitted)
+//! 3. Terminates the thread
+
+use super::queue::TaskQueue;
+use super::task::Task;
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+/// Message sent to the DelayedTaskSubmitter thread.
+pub enum DelayedMessage {
+    /// A task to be resubmitted after the specified delay.
+    DelayedTask {
+        /// The task to resubmit (boxed to reduce enum size)
+        task: Box<Task>,
+        /// Delay in milliseconds before resubmitting
+        delay_ms: u64,
+    },
+    /// Signal to shut down the DelayedTaskSubmitter thread.
+    Shutdown,
+}
+
+/// Handle for communicating with the DelayedTaskSubmitter thread.
+///
+/// This handle is held by the executor and used to send delayed tasks
+/// to the submitter thread. It can be cloned for use in multiple contexts.
+#[derive(Clone)]
+pub struct DelayedTaskSubmitterHandle {
+    /// Channel sender for communicating with the submitter thread
+    sender: std::sync::mpsc::Sender<DelayedMessage>,
+}
+
+impl DelayedTaskSubmitterHandle {
+    /// Submit a task for delayed resubmission.
+    ///
+    /// # Arguments
+    ///
+    /// * `task` - The task to resubmit
+    /// * `delay_ms` - Delay in milliseconds before resubmitting
+    ///
+    /// # Returns
+    ///
+    /// `true` if the task was successfully sent to the submitter thread,
+    /// `false` if the channel is closed (submitter has shut down).
+    pub fn submit_delayed(&self, task: Task, delay_ms: u64) -> bool {
+        self.sender
+            .send(DelayedMessage::DelayedTask {
+                task: Box::new(task),
+                delay_ms,
+            })
+            .is_ok()
+    }
+
+    /// Signal the DelayedTaskSubmitter to shut down.
+    ///
+    /// This will cause the submitter thread to discard all pending tasks
+    /// and terminate.
+    pub fn shutdown(&self) -> bool {
+        self.sender.send(DelayedMessage::Shutdown).is_ok()
+    }
+}
+
+/// Manages delayed task resubmission in a separate thread.
+///
+/// The submitter receives tasks via a channel, sleeps for the specified delay,
+/// and then pushes the task back into the executor's task queue.
+pub struct DelayedTaskSubmitter {
+    /// Handle to the submitter thread
+    thread_handle: Option<JoinHandle<()>>,
+    /// Handle for sending messages to the thread
+    handle: DelayedTaskSubmitterHandle,
+}
+
+impl DelayedTaskSubmitter {
+    /// Create and start a new DelayedTaskSubmitter.
+    ///
+    /// # Arguments
+    ///
+    /// * `task_queue` - The executor's task queue where delayed tasks will be pushed
+    ///
+    /// # Returns
+    ///
+    /// A new DelayedTaskSubmitter with a running background thread.
+    pub fn new(task_queue: Arc<Mutex<Box<dyn TaskQueue>>>) -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel::<DelayedMessage>();
+
+        let thread_handle = thread::spawn(move || {
+            Self::run_loop(receiver, task_queue);
+        });
+
+        Self {
+            thread_handle: Some(thread_handle),
+            handle: DelayedTaskSubmitterHandle { sender },
+        }
+    }
+
+    /// Get a cloneable handle for communicating with the submitter.
+    ///
+    /// The handle can be cloned and shared across threads.
+    pub fn get_handle(&self) -> DelayedTaskSubmitterHandle {
+        self.handle.clone()
+    }
+
+    /// The main loop running in the submitter thread.
+    ///
+    /// Receives delayed tasks from the channel, sleeps for the specified delay,
+    /// and pushes them back into the executor's task queue.
+    fn run_loop(
+        receiver: std::sync::mpsc::Receiver<DelayedMessage>,
+        task_queue: Arc<Mutex<Box<dyn TaskQueue>>>,
+    ) {
+        loop {
+            // Wait for a message
+            match receiver.recv() {
+                Ok(DelayedMessage::DelayedTask { task, delay_ms }) => {
+                    // Sleep for the specified delay
+                    if delay_ms > 0 {
+                        thread::sleep(Duration::from_millis(delay_ms));
+                    }
+
+                    // Push the task back into the executor's queue (unboxing)
+                    if let Ok(mut queue) = task_queue.lock() {
+                        queue.push(*task);
+                    }
+                    // If lock fails, silently drop the task (executor is likely shutting down)
+                }
+                Ok(DelayedMessage::Shutdown) => {
+                    // Shutdown requested - exit the loop
+                    break;
+                }
+                Err(_) => {
+                    // Channel closed - sender dropped, exit the loop
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Shut down the DelayedTaskSubmitter and wait for the thread to finish.
+    ///
+    /// This method sends a shutdown signal and joins the thread.
+    /// Any pending delayed tasks will be discarded.
+    pub fn shutdown(mut self) {
+        // Send shutdown signal (ignore error if already closed)
+        let _ = self.handle.shutdown();
+
+        // Join the thread
+        if let Some(handle) = self.thread_handle.take() {
+            let _ = handle.join();
+        }
+    }
+
+    /// Shut down and wait for the thread to finish, returning any error from join.
+    ///
+    /// This is similar to `shutdown()` but allows handling thread panics.
+    pub fn shutdown_and_join(mut self) -> Result<(), Box<dyn std::any::Any + Send>> {
+        // Send shutdown signal (ignore error if already closed)
+        let _ = self.handle.shutdown();
+
+        // Join the thread
+        if let Some(handle) = self.thread_handle.take() {
+            handle.join()
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for DelayedTaskSubmitter {
+    fn drop(&mut self) {
+        // Send shutdown signal if thread is still running
+        let _ = self.handle.shutdown();
+
+        // Join the thread to prevent orphaned threads
+        if let Some(handle) = self.thread_handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::executor::queue::FifoQueue;
+    use crate::pipeline::{Buffer, PipelineId};
+    use crate::sequence::SequenceNumber;
+    use std::time::Instant;
+
+    #[test]
+    fn test_delayed_submitter_creation() {
+        let queue: Arc<Mutex<Box<dyn TaskQueue>>> =
+            Arc::new(Mutex::new(Box::new(FifoQueue::new())));
+        let submitter = DelayedTaskSubmitter::new(queue);
+
+        // Should be able to get a handle
+        let _handle = submitter.get_handle();
+
+        // Shutdown should work
+        submitter.shutdown();
+    }
+
+    #[test]
+    fn test_immediate_resubmission() {
+        let queue: Arc<Mutex<Box<dyn TaskQueue>>> =
+            Arc::new(Mutex::new(Box::new(FifoQueue::new())));
+        let submitter = DelayedTaskSubmitter::new(Arc::clone(&queue));
+        let handle = submitter.get_handle();
+
+        // Submit a task with 0 delay
+        let task = Task::WorkTask {
+            query_id: 0,
+            pipeline_id: PipelineId::new("test"),
+            buffer: Buffer::new(vec![1, 2, 3], SequenceNumber::new(1)),
+        };
+        assert!(handle.submit_delayed(task, 0));
+
+        // Give thread time to process
+        thread::sleep(Duration::from_millis(10));
+
+        // Task should be in the queue
+        {
+            let mut q = queue.lock().unwrap();
+            let task = q.pop();
+            assert!(matches!(task, Some(Task::WorkTask { .. })));
+        }
+
+        submitter.shutdown();
+    }
+
+    #[test]
+    fn test_delayed_resubmission() {
+        let queue: Arc<Mutex<Box<dyn TaskQueue>>> =
+            Arc::new(Mutex::new(Box::new(FifoQueue::new())));
+        let submitter = DelayedTaskSubmitter::new(Arc::clone(&queue));
+        let handle = submitter.get_handle();
+
+        let start = Instant::now();
+
+        // Submit a task with 50ms delay
+        let task = Task::WorkTask {
+            query_id: 0,
+            pipeline_id: PipelineId::new("test"),
+            buffer: Buffer::new(vec![1, 2, 3], SequenceNumber::new(1)),
+        };
+        assert!(handle.submit_delayed(task, 50));
+
+        // Task should not be in queue immediately
+        {
+            let q = queue.lock().unwrap();
+            assert!(q.is_empty());
+        }
+
+        // Wait for delay + some margin
+        thread::sleep(Duration::from_millis(100));
+
+        let elapsed = start.elapsed();
+        assert!(elapsed >= Duration::from_millis(50));
+
+        // Task should now be in the queue
+        {
+            let mut q = queue.lock().unwrap();
+            let task = q.pop();
+            assert!(matches!(task, Some(Task::WorkTask { .. })));
+        }
+
+        submitter.shutdown();
+    }
+
+    #[test]
+    fn test_shutdown_discards_pending() {
+        let queue: Arc<Mutex<Box<dyn TaskQueue>>> =
+            Arc::new(Mutex::new(Box::new(FifoQueue::new())));
+        let submitter = DelayedTaskSubmitter::new(Arc::clone(&queue));
+        let handle = submitter.get_handle();
+
+        // Submit a task with long delay
+        let task = Task::WorkTask {
+            query_id: 0,
+            pipeline_id: PipelineId::new("test"),
+            buffer: Buffer::new(vec![1, 2, 3], SequenceNumber::new(1)),
+        };
+        assert!(handle.submit_delayed(task, 10000)); // 10 second delay
+
+        // Shutdown immediately
+        submitter.shutdown();
+
+        // Task should NOT be in the queue (was discarded)
+        {
+            let q = queue.lock().unwrap();
+            assert!(q.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_handle_cloning() {
+        let queue: Arc<Mutex<Box<dyn TaskQueue>>> =
+            Arc::new(Mutex::new(Box::new(FifoQueue::new())));
+        let submitter = DelayedTaskSubmitter::new(Arc::clone(&queue));
+
+        let handle1 = submitter.get_handle();
+        let handle2 = handle1.clone();
+
+        // Both handles should work
+        let task1 = Task::WorkTask {
+            query_id: 0,
+            pipeline_id: PipelineId::new("test1"),
+            buffer: Buffer::new(vec![1], SequenceNumber::new(1)),
+        };
+        let task2 = Task::WorkTask {
+            query_id: 0,
+            pipeline_id: PipelineId::new("test2"),
+            buffer: Buffer::new(vec![2], SequenceNumber::new(2)),
+        };
+
+        assert!(handle1.submit_delayed(task1, 0));
+        assert!(handle2.submit_delayed(task2, 0));
+
+        // Give thread time to process
+        thread::sleep(Duration::from_millis(10));
+
+        // Both tasks should be in the queue
+        {
+            let mut q = queue.lock().unwrap();
+            assert!(q.pop().is_some());
+            assert!(q.pop().is_some());
+        }
+
+        submitter.shutdown();
+    }
+}

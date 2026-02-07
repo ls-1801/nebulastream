@@ -1,0 +1,17 @@
+[package]
+name = "adaptive-engine"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "adaptive_engine"
+crate-type = ["lib", "staticlib"]
+
+[dependencies]
+thiserror = "2.0"
+crossbeam = "0.8"
+rand = "0.8"
+cxx = "1.0"
+
+[build-dependencies]
+cxx-build = "1.0"

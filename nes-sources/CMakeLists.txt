@@ -18,7 +18,6 @@ target_link_libraries(nes-sources PUBLIC nes-common nes-configurations nes-memor
 
 target_include_directories(nes-sources PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../cpp/include>
         $<INSTALL_INTERFACE:include/nebulastream/>
         PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/private>)
 
