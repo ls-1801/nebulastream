@@ -38,7 +38,7 @@
 //! }
 //! ```
 
-use crate::ffi::QueryId;
+use crate::executor::QueryId;
 use crate::pipeline::PipelineId;
 use std::sync::mpsc::Sender;
 

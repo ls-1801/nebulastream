@@ -111,7 +111,8 @@ pub use error::{ExecutionStats, ExecutorError};
 pub use queue::{FifoQueue, LifoQueue, PriorityQueue, RandomQueue, TaskQueue};
 pub use stats::{StatisticsEvent, StatisticsSender, TaskId, WorkerId};
 
-use crate::ffi::QueryId;
+/// Unique identifier for a submitted query.
+pub type QueryId = u64;
 use crate::graph::PipelineGraph;
 use crate::pipeline::{Buffer, PipelineId};
 use error::{EntityType, ExecutionError, TaskType};
@@ -1505,7 +1506,35 @@ impl Executor {
             }
         }
 
-        // 4. Call teardown() - if this fails, record error and terminate the query
+        // 3.5. If this is a source pipeline, signal its thread to stop before teardown.
+        // This ensures the source worker thread exits before teardown tries to join it.
+        {
+            let queries_guard = self.queries.read().unwrap();
+            if let Some(query_state) = queries_guard
+                .values()
+                .find(|qs| qs.graph.get_pipeline(pipeline_id).is_some())
+            {
+                if query_state.graph.is_source(pipeline_id) {
+                    // Set the stop flag so the source thread's should_stop() returns true
+                    let metadata = self.metadata.lock().unwrap();
+                    if let Some(meta) = metadata.get(pipeline_id) {
+                        meta.request_source_stop();
+                    }
+                    drop(metadata);
+
+                    // Call stop_source() to signal the source
+                    if let Some(source_pipeline) =
+                        query_state.graph.get_source_pipeline(pipeline_id)
+                    {
+                        let _ = source_pipeline.stop_source();
+                    }
+                }
+            }
+        }
+
+        // 4. Call teardown() - if this fails, record error and terminate the query.
+        //    Supports repeat_task during teardown: if the pipeline calls
+        //    context.repeat_task() during teardown, we call teardown again.
         let teardown_failed = {
             let queries_guard = self.queries.read().unwrap();
 
@@ -1522,31 +1551,44 @@ impl Executor {
 
             if let (Some(graph), Some(query_state)) = (found_graph, found_query_state) {
                 if let Some(pipeline) = graph.get_pipeline(pipeline_id) {
-                    // Create context for teardown
-                    let (emit_tx, _emit_rx) = channel();
-                    let context = context::ExecutorContext::new(pipeline_id.clone(), 0, 1, emit_tx);
+                    let mut failed = false;
+                    loop {
+                        // Create context for teardown
+                        let (emit_tx, _emit_rx) = channel();
+                        let context =
+                            context::ExecutorContext::new(pipeline_id.clone(), 0, 1, emit_tx);
 
-                    match pipeline.teardown(&context) {
-                        Ok(()) => false,
-                        Err(e) => {
-                            eprintln!(
-                                "FATAL ERROR: Pipeline {} teardown failed: {}",
-                                pipeline_id, e
-                            );
-                            eprintln!("Terminating query {} execution immediately", query_id);
+                        match pipeline.teardown(&context) {
+                            Ok(()) => {
+                                // Check if repeat_task was called during teardown
+                                if context.take_repeat_buffer().is_some() {
+                                    // Pipeline wants to be called again
+                                    continue;
+                                }
+                                break;
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "FATAL ERROR: Pipeline {} teardown failed: {}",
+                                    pipeline_id, e
+                                );
+                                eprintln!("Terminating query {} execution immediately", query_id);
 
-                            // Record error in per-query error state
-                            query_state.error_state.record_error(ExecutionError {
-                                entity_id: pipeline_id.clone(),
-                                entity_type: EntityType::Pipeline,
-                                error: e.to_string(),
-                                task_type: TaskType::StopPipeline,
-                            });
+                                // Record error in per-query error state
+                                query_state.error_state.record_error(ExecutionError {
+                                    entity_id: pipeline_id.clone(),
+                                    entity_type: EntityType::Pipeline,
+                                    error: e.to_string(),
+                                    task_type: TaskType::StopPipeline,
+                                });
 
-                            stats.errors_encountered += 1;
-                            true
+                                stats.errors_encountered += 1;
+                                failed = true;
+                                break;
+                            }
                         }
                     }
+                    failed
                 } else {
                     false
                 }
@@ -1905,6 +1947,17 @@ impl Executor {
 
             (pipeline_ids, errors, source_ids)
         };
+
+        // Signal all source stop flags FIRST so worker threads see should_stop() == true.
+        // This must happen before teardown which joins the thread.
+        {
+            let metadata = self.metadata.lock().unwrap();
+            for source_id in &source_ids {
+                if let Some(meta) = metadata.get(source_id) {
+                    meta.request_source_stop();
+                }
+            }
+        }
 
         // Stop all source threads BEFORE removing query state.
         // This is critical because source threads hold Arc clones of the C++

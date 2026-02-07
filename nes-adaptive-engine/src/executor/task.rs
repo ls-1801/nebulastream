@@ -3,7 +3,7 @@
 //! Defines the task enum variants that can be submitted to the executor's
 //! task queue for processing by the single execution thread.
 
-use crate::ffi::QueryId;
+use crate::executor::QueryId;
 use crate::graph::PipelineGraph;
 use crate::pipeline::{Buffer, PipelineId};
 

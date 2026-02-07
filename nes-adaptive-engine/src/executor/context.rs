@@ -4,7 +4,7 @@
 //! pipelines access to executor services during execution, matching NebulaStream's
 //! PipelineExecutionContext interface.
 
-use crate::ffi::QueryId;
+use crate::executor::QueryId;
 use crate::pipeline::{Buffer, PipelineError, PipelineId};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;

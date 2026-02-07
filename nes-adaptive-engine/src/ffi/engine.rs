@@ -4,7 +4,7 @@
 //! allowing C++ code to create and control the execution engine.
 
 use crate::executor::stats::{StatisticsEvent, StatisticsSender};
-use crate::executor::{Executor, ExecutorHandle};
+use crate::executor::{Executor, ExecutorHandle, QueryId};
 #[cfg(feature = "cpp-ffi")]
 use crate::ffi::callbacks::{CppPipelineStage, CppSourceAdapter, CppSourceHandle};
 #[cfg(feature = "cpp-ffi")]
@@ -16,9 +16,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-
-/// Unique identifier for a submitted query.
-pub type QueryId = u64;
 
 /// Global counter for generating unique query IDs.
 #[cfg(feature = "cpp-ffi")]

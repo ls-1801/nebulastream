@@ -5,6 +5,11 @@
 
 #![allow(dead_code)]
 
+pub mod capturing_sink;
+pub mod controlled_pipeline;
+pub mod controlled_source;
+pub mod stats_collector;
+
 use adaptive_engine::pipeline::Buffer;
 
 /// Generate a sequence of test buffers.

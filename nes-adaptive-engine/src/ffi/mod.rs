@@ -102,9 +102,10 @@ mod ffi {
 }
 
 // Re-export FFI functions at module level for CXX bridge
+pub use crate::executor::QueryId;
 #[cfg(feature = "cpp-ffi")]
 pub use engine::engine_submit_query;
-pub use engine::{engine_create, engine_get_stats, engine_shutdown, engine_start, QueryId};
+pub use engine::{engine_create, engine_get_stats, engine_shutdown, engine_start};
 
 // Re-export the CXX-generated types
 pub use ffi::FfiExecutionStats;

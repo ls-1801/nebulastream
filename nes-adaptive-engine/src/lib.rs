@@ -21,6 +21,7 @@
 //! ```
 
 pub mod builder;
+pub mod engine;
 pub mod executor;
 pub mod ffi;
 pub mod graph;
@@ -29,7 +30,10 @@ pub mod sequence;
 pub mod source;
 
 // Re-export executor types
-pub use executor::{ExecutionStats, Executor, ExecutorError, ExecutorHandle};
+pub use executor::{ExecutionStats, Executor, ExecutorError, ExecutorHandle, QueryId};
+
+// Re-export engine types
+pub use engine::Engine;
 
 // Re-export source types
 pub use source::{
