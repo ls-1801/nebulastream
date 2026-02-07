@@ -75,6 +75,7 @@ RUN set -eux; \
     \
     rustup install nightly; \
     rustup component add rust-src --toolchain nightly; \
+    rustup component add clippy rustfmt; \
     rustup --version; \
     cargo --version; \
     rustc --version;

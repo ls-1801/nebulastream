@@ -15,6 +15,9 @@ exec docker run --rm \
     -v "${WORKSPACE}:/workspace" \
     -v ccache:/ccache \
     -e CCACHE_DIR=/ccache \
+    -e CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 \
+    -v $HOME/.claude:$HOME/.claude \
     -w /workspace \
-    nebulastream/nes-development:local \
-    "$@"
+    -it \
+    nebulastream/nes-development:claude \
+    $HOME/.local/bin/claude --allow-dangerously-skip-permissions "$@" 

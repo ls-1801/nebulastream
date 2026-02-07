@@ -29,10 +29,10 @@ run_step() {
 run_systest() {
     local name="$1"
     local test_file="$2"
-    run_step "systest: $name" ./devc timeout 60 \
-        /workspace/nes/build/nes-systests/systest/systest \
+    run_step "systest: $name" timeout 60 \
+        "$SCRIPT_DIR/build-debug/nes-systests/systest/systest" \
         --sequential \
-        -t "/workspace/nes/nes-systests/$test_file" \
+        -t "$SCRIPT_DIR/nes-systests/$test_file" \
         -- \
         --worker.default_query_execution.execution_mode=INTERPRETER \
         --worker.default_query_execution.join_strategy=NESTED_LOOP_JOIN
@@ -49,10 +49,11 @@ run_step "cmake build" cmake --build nes-adaptive-engine/build-ae
 run_step "QueryEngineTest (standalone)" ctest --test-dir nes-adaptive-engine/build-ae --output-on-failure
 
 # --- NES build + systest ---
-run_step "NES build (systest target)" ./devc cmake --build /workspace/nes/build --target systest -j8
+run_step "NES configure" cmake --preset debug
+run_step "NES build (systest target)" cmake --build --preset debug --target systest -j$(nproc)
 
 # Run NES QueryEngineTest
-run_step "QueryEngineTest (NES)" ./devc timeout 120 ctest --test-dir /workspace/nes/build -R QueryEngineTest --output-on-failure --timeout 30
+run_step "QueryEngineTest (NES)" timeout 120 ctest --test-dir "$SCRIPT_DIR/build-debug" -R QueryEngineTest --output-on-failure --timeout 30
 
 # Run individual systest files (each in its own engine instance)
 run_systest "OneTuple" "tuples/OneTuple.test"
@@ -62,8 +63,8 @@ run_systest "TuplesDontFitIntoOneBuffer" "tuples/TuplesDontFitIntoOneBuffer.test
 run_systest "TupleLargerThanBuffer" "tuples/TupleLargerThanBuffer.test"
 
 # Run full systest (all non-large queries in one engine instance)
-run_step "systest (full)" ./devc timeout 60 \
-    /workspace/nes/build/nes-systests/systest/systest \
+run_step "systest (full)" timeout 60 \
+    "$SCRIPT_DIR/build-debug/nes-systests/systest/systest" \
     --exclude-groups large \
     -- \
     --worker.default_query_execution.execution_mode=INTERPRETER \

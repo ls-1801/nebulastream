@@ -189,3 +189,8 @@ Either build locally with the -l option, or open a PR (draft) and let the CI bui
                --build-arg ROOTLESS=${USE_ROOTLESS} \
                --build-arg TAG=${TAG} .
 fi
+
+echo "Building Claude Code development image..."
+docker build -f scripts/DevelopmentClaude.dockerfile \
+             -t nebulastream/nes-development:claude \
+             --build-arg TAG=local .
