@@ -43,12 +43,7 @@ run_step "cargo check" cargo check --manifest-path nes-adaptive-engine/Cargo.tom
 run_step "cargo clippy" cargo clippy --manifest-path nes-adaptive-engine/Cargo.toml -- -D warnings
 run_step "cargo fmt" cargo fmt --manifest-path nes-adaptive-engine/Cargo.toml --check
 
-# --- Standalone QueryEngineTest ---
-run_step "cmake configure" cmake --preset debug -S nes-adaptive-engine/cpp/
-run_step "cmake build" cmake --build nes-adaptive-engine/build-ae
-run_step "QueryEngineTest (standalone)" ctest --test-dir nes-adaptive-engine/build-ae --output-on-failure
-
-# --- NES build + systest ---
+# --- NES build + tests ---
 run_step "NES configure" cmake --preset debug
 run_step "NES build (systest target)" cmake --build --preset debug --target systest -j$(nproc)
 

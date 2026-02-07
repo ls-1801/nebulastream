@@ -12,8 +12,11 @@ This project is designed to be built inside the development container. The conta
 # Configure (debug)
 cmake --preset debug
 
-# Build
+# Build everything
 cmake --build --preset debug -j$(nproc)
+
+# Build a specific target
+cmake --build --preset debug --target QueryEngineTest
 
 # Configure + build (relwithdebinfo)
 cmake --preset relwithdebinfo
@@ -30,7 +33,7 @@ Build outputs:
 # Run all tests
 ctest --test-dir build-debug --output-on-failure
 
-# Run a specific test
+# Run QueryEngineTest (adaptive engine)
 ctest --test-dir build-debug -R QueryEngineTest --output-on-failure
 
 # Run systests
@@ -43,20 +46,16 @@ build-debug/nes-systests/systest/systest --sequential \
 
 ## Quality Gate
 
-Run `./quality_gate.sh` to execute all quality checks. It runs Rust checks, standalone adaptive-engine tests, the NES build, and systests.
+Run `./quality_gate.sh` to execute all quality checks. It runs Rust checks, the NES build, QueryEngineTest, and systests.
 
-## Adaptive Engine (Rust + C++)
+## Adaptive Engine (Rust)
 
-The adaptive engine has its own standalone build for faster iteration:
+The adaptive engine Rust code can be checked independently for faster iteration:
 
 ```bash
-# Rust checks
 cargo check --manifest-path nes-adaptive-engine/Cargo.toml
 cargo clippy --manifest-path nes-adaptive-engine/Cargo.toml -- -D warnings
 cargo fmt --manifest-path nes-adaptive-engine/Cargo.toml --check
-
-# Standalone C++ tests (uses its own CMakePresets.json)
-cmake --preset debug -S nes-adaptive-engine/cpp/
-cmake --build nes-adaptive-engine/build-ae
-ctest --test-dir nes-adaptive-engine/build-ae --output-on-failure
 ```
+
+The C++ tests (QueryEngineTest) are built as part of the NES root CMake system.

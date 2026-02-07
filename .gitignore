@@ -14,6 +14,8 @@
 
 # Build files
 /build
+/build-debug
+/build-relwithdebinfo
 /build-docker*
 /cmake-build*
 CMakeUserPresets.json
