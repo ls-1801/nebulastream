@@ -92,7 +92,7 @@ uint64_t LowerToCompiledQueryPlanPhase::processSink(const std::shared_ptr<Pipeli
     return stageIndex;
 }
 
-std::unique_ptr<adaptive_engine::PipelineStage>
+std::unique_ptr<NesPipelineStage>
 LowerToCompiledQueryPlanPhase::getStage(const std::shared_ptr<Pipeline>& pipeline)
 {
     nautilus::engine::Options options;
@@ -158,7 +158,7 @@ uint64_t LowerToCompiledQueryPlanPhase::processOperatorPipeline(const std::share
     for (const auto& successor : pipeline->getSuccessors())
     {
         auto successorStageIndex = processSuccessor(successor);
-        edges_.push_back(adaptive_engine::Edge{.source_stage = stageIndex, .target_stage = successorStageIndex});
+        edges_.push_back(NesEdge{.sourceStage = stageIndex, .targetStage = successorStageIndex});
     }
 
     return stageIndex;

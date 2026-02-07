@@ -20,14 +20,15 @@
 #include <Identifiers/Identifiers.hpp>
 #include <Sinks/SinkDescriptor.hpp>
 #include <Sources/SourceDescriptor.hpp>
-#include <adaptive_engine/Engine.hpp>
+#include <Execution/NesQueryPlan.hpp>
+#include <Execution/NesPipelineStage.hpp>
 
 namespace NES
 {
 
 /// Compiled query plan that can be instantiated into an executable form.
 ///
-/// This structure holds the compiled pipeline stages (which implement adaptive_engine::PipelineStage)
+/// This structure holds the compiled pipeline stages (which implement NesPipelineStage)
 /// along with edge definitions and source/sink descriptors. The descriptors are abstract and get
 /// instantiated into concrete sources and sinks during query instantiation.
 struct CompiledQueryPlan
@@ -54,18 +55,18 @@ struct CompiledQueryPlan
     /// Create a CompiledQueryPlan
     static std::unique_ptr<CompiledQueryPlan> create(
         LocalQueryId localQueryId,
-        std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> stages,
-        std::vector<adaptive_engine::Edge> edges,
+        std::vector<std::unique_ptr<NesPipelineStage>> stages,
+        std::vector<NesEdge> edges,
         std::vector<SourceInfo> sources,
         std::vector<PendingSink> pending_sinks);
 
     LocalQueryId localQueryId;
 
-    /// Pipeline stages implementing adaptive_engine::PipelineStage
-    std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> stages;
+    /// Pipeline stages implementing NesPipelineStage
+    std::vector<std::unique_ptr<NesPipelineStage>> stages;
 
-    /// Edges connecting stages (source_stage, target_stage indices)
-    std::vector<adaptive_engine::Edge> edges;
+    /// Edges connecting stages (sourceStage, targetStage indices)
+    std::vector<NesEdge> edges;
 
     /// Source descriptors with target stage mappings
     std::vector<SourceInfo> sources;

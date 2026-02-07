@@ -21,7 +21,6 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
-#include <adaptive_engine/ExecutionContext.hpp>
 
 #include <Configurations/Descriptor.hpp>
 #include <Runtime/TupleBuffer.hpp>
@@ -56,7 +55,7 @@ PrintSink::PrintSink(BackpressureController backpressureController, const SinkDe
     }
 }
 
-void PrintSink::doExecute(adaptive_engine::ExecutionContext& /*ctx*/, TupleBuffer& inputBuffer)
+void PrintSink::doExecute(NesStageContext& /*ctx*/, TupleBuffer& inputBuffer)
 {
     PRECONDITION(inputBuffer, "Invalid input buffer in PrintSink.");
 
@@ -65,7 +64,7 @@ void PrintSink::doExecute(adaptive_engine::ExecutionContext& /*ctx*/, TupleBuffe
     std::this_thread::sleep_for(std::chrono::milliseconds{ingestion});
 }
 
-std::string PrintSink::get_id() const
+std::string PrintSink::getId() const
 {
     return std::string(NAME);
 }

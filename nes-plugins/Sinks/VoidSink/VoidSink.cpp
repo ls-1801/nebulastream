@@ -17,7 +17,6 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
-#include <adaptive_engine/ExecutionContext.hpp>
 
 #include <Configurations/Descriptor.hpp>
 #include <Runtime/TupleBuffer.hpp>
@@ -33,12 +32,12 @@ VoidSink::VoidSink(BackpressureController backpressureController, const SinkDesc
 {
 }
 
-void VoidSink::doExecute(adaptive_engine::ExecutionContext& /*ctx*/, TupleBuffer& inputTupleBuffer)
+void VoidSink::doExecute(NesStageContext& /*ctx*/, TupleBuffer& inputTupleBuffer)
 {
     PRECONDITION(inputTupleBuffer, "Invalid input buffer in VoidSink.");
 }
 
-std::string VoidSink::get_id() const
+std::string VoidSink::getId() const
 {
     return std::string(NAME);
 }

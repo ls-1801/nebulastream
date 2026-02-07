@@ -21,7 +21,7 @@
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <nautilus/Engine.hpp>
-#include <adaptive_engine/PipelineStage.hpp>
+#include <Execution/NesPipelineStage.hpp>
 #include <ExecutionContext.hpp>
 #include <Pipeline.hpp>
 #include <PipelineExecutionContext.hpp>
@@ -31,8 +31,8 @@ namespace NES
 class DumpHelper;
 
 /// A compiled executable pipeline stage uses nautilus-lib to compile a pipeline to a code snippet.
-/// Implements adaptive_engine::PipelineStage for the Rust execution engine.
-class CompiledExecutablePipelineStage final : public adaptive_engine::PipelineStage
+/// Implements NesPipelineStage for the execution engine.
+class CompiledExecutablePipelineStage final : public NesPipelineStage
 {
 public:
     CompiledExecutablePipelineStage(
@@ -43,20 +43,20 @@ public:
 
     /// Called once when the pipeline starts
     /// @param ctx Execution context for this invocation
-    void start(adaptive_engine::ExecutionContext& ctx) override;
+    void start(NesStageContext& ctx) override;
 
     /// Called for each input buffer to process
     /// @param ctx Execution context for this invocation
-    /// @param input The input buffer to process
-    void execute(adaptive_engine::ExecutionContext& ctx, adaptive_engine::BufferHandle input) override;
+    /// @param buffer The TupleBuffer to process
+    void doExecute(NesStageContext& ctx, TupleBuffer& buffer) override;
 
     /// Called once when the pipeline stops
     /// @param ctx Execution context for this invocation
-    void stop(adaptive_engine::ExecutionContext& ctx) override;
+    void stop(NesStageContext& ctx) override;
 
     /// Get the unique identifier for this stage
     /// @return Stage identifier string
-    [[nodiscard]] std::string get_id() const override;
+    [[nodiscard]] std::string getId() const override;
 
     /// Legacy PipelineExecutionContext-based interface (used by input formatter test infrastructure)
     void start(PipelineExecutionContext& pipelineExecutionContext);

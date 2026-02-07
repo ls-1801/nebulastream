@@ -43,15 +43,15 @@ public:
     static constexpr std::string_view NAME = "Checksum";
     explicit ChecksumSink(BackpressureController backpressureController, const SinkDescriptor& sinkDescriptor);
 
-    /// --- adaptive_engine::PipelineStage interface (via NesPipelineStage) ---
-    void start(adaptive_engine::ExecutionContext& ctx) override;
-    void stop(adaptive_engine::ExecutionContext& ctx) override;
-    [[nodiscard]] std::string get_id() const override;
+    /// --- NesPipelineStage interface ---
+    void start(NesStageContext& ctx) override;
+    void stop(NesStageContext& ctx) override;
+    [[nodiscard]] std::string getId() const override;
     static DescriptorConfig::Config validateAndFormat(std::unordered_map<std::string, std::string> config);
 
 protected:
-    /// Process a TupleBuffer (new adaptive engine path via NesPipelineStage)
-    void doExecute(adaptive_engine::ExecutionContext& ctx, TupleBuffer& buffer) override;
+    /// Process a TupleBuffer
+    void doExecute(NesStageContext& ctx, TupleBuffer& buffer) override;
 
     std::ostream& toString(std::ostream& os) const override { return os << "ChecksumSink"; }
 

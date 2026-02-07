@@ -17,7 +17,7 @@
 #include <cstdint>
 #include <functional>
 #include <adaptive_engine/ExecutionContext.hpp>
-#include <BufferManagement/NesBufferProvider.hpp>
+#include "NesBufferProvider.hpp"
 
 namespace NES
 {

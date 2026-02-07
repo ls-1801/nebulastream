@@ -48,14 +48,14 @@ public:
     PrintSink(PrintSink&&) = delete;
     PrintSink& operator=(PrintSink&&) = delete;
 
-    /// --- adaptive_engine::PipelineStage interface (via NesPipelineStage) ---
-    [[nodiscard]] std::string get_id() const override;
+    /// --- NesPipelineStage interface ---
+    [[nodiscard]] std::string getId() const override;
 
     static DescriptorConfig::Config validateAndFormat(std::unordered_map<std::string, std::string> config);
 
 protected:
-    /// Process a TupleBuffer (new adaptive engine path via NesPipelineStage)
-    void doExecute(adaptive_engine::ExecutionContext& ctx, TupleBuffer& buffer) override;
+    /// Process a TupleBuffer
+    void doExecute(NesStageContext& ctx, TupleBuffer& buffer) override;
 
     std::ostream& toString(std::ostream& str) const override;
 

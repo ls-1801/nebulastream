@@ -20,9 +20,9 @@
 #include <optional>
 #include <stop_token>
 #include <string>
-#include <adaptive_engine/SourceHandle.hpp>
+#include <Execution/NesSourceAdapter.hpp>
+#include <Execution/NesStageContext.hpp>
 #include <Identifiers/Identifiers.hpp>
-#include <Runtime/AbstractBufferProvider.hpp>
 #include <Sources/Source.hpp>
 
 namespace NES
@@ -36,7 +36,7 @@ namespace NES
 ///
 /// Threading model: The adaptive engine executor calls next_buffer() from its worker threads.
 /// This adapter is synchronous - it blocks on fillTupleBuffer() until data is available.
-class NesSourceHandle final : public adaptive_engine::SourceHandle
+class NesSourceHandle final : public NesSourceAdapter
 {
 public:
     /// Construct a NesSourceHandle wrapping a NES Source.
@@ -59,23 +59,23 @@ public:
     /// Get the next buffer from the source.
     /// @param ctx Execution context for this invocation
     /// @return Buffer handle if data available, nullopt if source is exhausted (EoS)
-    std::optional<adaptive_engine::BufferHandle> next_buffer(adaptive_engine::ExecutionContext& ctx) override;
+    std::optional<TupleBuffer> nextBuffer(NesStageContext& ctx) override;
 
     /// Open the source for reading.
     /// @param ctx Execution context for this invocation
-    void open(adaptive_engine::ExecutionContext& ctx) override;
+    void open(NesStageContext& ctx) override;
 
     /// Close the source.
     /// @param ctx Execution context for this invocation
-    void close(adaptive_engine::ExecutionContext& ctx) override;
+    void close(NesStageContext& ctx) override;
 
     /// Get the unique identifier for this source.
     /// @return Source identifier string
-    std::string get_id() const override;
+    std::string getId() const override;
 
     /// Request the source to stop producing data.
     /// This signals the stop token used in fillTupleBuffer.
-    void request_stop();
+    void requestStop() override;
 
 private:
     std::unique_ptr<Source> source_;

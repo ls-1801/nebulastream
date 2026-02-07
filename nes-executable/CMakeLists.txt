@@ -17,6 +17,6 @@ target_include_directories(nes-executable PUBLIC
     include
     PRIVATE .
 )
-target_link_libraries(nes-executable PUBLIC nes-common nes-runtime adaptive_engine)
+target_link_libraries(nes-executable PUBLIC nes-common nes-runtime)
 
 add_tests_if_enabled(tests)

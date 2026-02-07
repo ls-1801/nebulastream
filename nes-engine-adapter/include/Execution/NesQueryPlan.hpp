@@ -12,7 +12,9 @@
     limitations under the License.
 */
 
-#include <CompiledQueryPlan.hpp>
+#pragma once
+
+#include <cstdint>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -20,22 +22,23 @@
 namespace NES
 {
 
-std::unique_ptr<CompiledQueryPlan> CompiledQueryPlan::create(
-    LocalQueryId localQueryId,
-    std::vector<std::unique_ptr<NesPipelineStage>> stages,
-    std::vector<NesEdge> edges,
-    std::vector<SourceInfo> sources,
-    std::vector<PendingSink> pending_sinks)
+class NesPipelineStage;
+class NesSourceAdapter;
+
+/// Edge in the query DAG, connecting source stage to target stage by index.
+struct NesEdge
 {
-    // Use raw new since make_unique requires default constructor
-    auto* rawPlan = new CompiledQueryPlan{
-        std::move(localQueryId),
-        std::move(stages),
-        std::move(edges),
-        std::move(sources),
-        std::move(pending_sinks)
-    };
-    return std::unique_ptr<CompiledQueryPlan>(rawPlan);
-}
+    uint64_t sourceStage;
+    uint64_t targetStage;
+};
+
+/// Query plan describing the DAG of stages and sources, using NES-owned types.
+struct NesQueryPlan
+{
+    std::vector<std::unique_ptr<NesPipelineStage>> stages;
+    std::vector<NesEdge> edges;
+    std::vector<std::unique_ptr<NesSourceAdapter>> sources;
+    std::vector<std::pair<uint64_t, uint64_t>> sourceToStage;
+};
 
 }  // namespace NES

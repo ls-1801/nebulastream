@@ -13,4 +13,5 @@
 add_source_files(nes-engine-adapter
         NesBufferProvider.cpp
         NesExecutionContext.cpp
+        NesQueryEngine.cpp
 )

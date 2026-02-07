@@ -12,7 +12,7 @@
     limitations under the License.
 */
 
-#include <Execution/NesExecutionContext.hpp>
+#include "NesExecutionContext.hpp"
 #include <ErrorHandling.hpp>
 
 namespace NES

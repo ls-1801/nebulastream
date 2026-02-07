@@ -12,7 +12,7 @@
     limitations under the License.
 */
 
-#include <BufferManagement/NesBufferProvider.hpp>
+#include "NesBufferProvider.hpp"
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <ErrorHandling.hpp>
 

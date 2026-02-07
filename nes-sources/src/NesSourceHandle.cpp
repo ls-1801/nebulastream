@@ -18,9 +18,6 @@
 #include <optional>
 #include <string>
 #include <utility>
-#include <adaptive_engine/Buffer.hpp>
-#include <adaptive_engine/ExecutionContext.hpp>
-#include <BufferManagement/NesBufferProvider.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Time/Timestamp.hpp>
@@ -42,9 +39,9 @@ NesSourceHandle::NesSourceHandle(
     PRECONDITION(bufferProvider_ != nullptr, "NesSourceHandle requires a valid buffer provider");
 }
 
-std::optional<adaptive_engine::BufferHandle> NesSourceHandle::next_buffer(adaptive_engine::ExecutionContext& /*ctx*/)
+std::optional<TupleBuffer> NesSourceHandle::nextBuffer(NesStageContext& /*ctx*/)
 {
-    PRECONDITION(opened_, "Source must be opened before calling next_buffer");
+    PRECONDITION(opened_, "Source must be opened before calling nextBuffer");
 
     // Get stop token for this source
     std::stop_token stopToken = stopSource_.get_token();
@@ -93,13 +90,10 @@ std::optional<adaptive_engine::BufferHandle> NesSourceHandle::next_buffer(adapti
     // Set the number of bytes read (Source uses this to communicate size)
     buffer->setNumberOfTuples(result.getNumberOfBytes());
 
-    // Wrap the TupleBuffer into a BufferHandle
-    auto* wrapper = new NesBufferWrapper(std::move(*buffer));
-
-    return adaptive_engine::BufferHandle{wrapper};
+    return std::move(*buffer);
 }
 
-void NesSourceHandle::open(adaptive_engine::ExecutionContext& /*ctx*/)
+void NesSourceHandle::open(NesStageContext& /*ctx*/)
 {
     PRECONDITION(!opened_, "Source is already opened");
 
@@ -108,7 +102,7 @@ void NesSourceHandle::open(adaptive_engine::ExecutionContext& /*ctx*/)
     opened_ = true;
 }
 
-void NesSourceHandle::close(adaptive_engine::ExecutionContext& /*ctx*/)
+void NesSourceHandle::close(NesStageContext& /*ctx*/)
 {
     if (!opened_)
     {
@@ -121,12 +115,12 @@ void NesSourceHandle::close(adaptive_engine::ExecutionContext& /*ctx*/)
     opened_ = false;
 }
 
-std::string NesSourceHandle::get_id() const
+std::string NesSourceHandle::getId() const
 {
     return fmt::format("source-{}", originId_.getRawValue());
 }
 
-void NesSourceHandle::request_stop()
+void NesSourceHandle::requestStop()
 {
     stopSource_.request_stop();
 }

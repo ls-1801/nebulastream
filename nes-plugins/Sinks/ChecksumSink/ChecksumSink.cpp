@@ -22,7 +22,6 @@
 #include <system_error>
 #include <unordered_map>
 #include <utility>
-#include <adaptive_engine/ExecutionContext.hpp>
 
 #include <Configurations/Descriptor.hpp>
 #include <Runtime/TupleBuffer.hpp>
@@ -45,7 +44,7 @@ ChecksumSink::ChecksumSink(BackpressureController backpressureController, const 
 {
 }
 
-void ChecksumSink::start(adaptive_engine::ExecutionContext& /*ctx*/)
+void ChecksumSink::start(NesStageContext& /*ctx*/)
 {
     NES_DEBUG("Setting up checksum sink: {}", *this);
     if (std::filesystem::exists(outputFilePath.c_str()))
@@ -73,14 +72,14 @@ void ChecksumSink::start(adaptive_engine::ExecutionContext& /*ctx*/)
     }
 }
 
-void ChecksumSink::doExecute(adaptive_engine::ExecutionContext& /*ctx*/, TupleBuffer& inputBuffer)
+void ChecksumSink::doExecute(NesStageContext& /*ctx*/, TupleBuffer& inputBuffer)
 {
     PRECONDITION(inputBuffer, "Invalid input buffer in ChecksumSink.");
     const std::string formatted = formatter->getFormattedBuffer(inputBuffer);
     checksum.add(formatted);
 }
 
-void ChecksumSink::stop(adaptive_engine::ExecutionContext& /*ctx*/)
+void ChecksumSink::stop(NesStageContext& /*ctx*/)
 {
     NES_INFO("Checksum Sink completed. Checksum: {}", fmt::streamed(checksum));
 
@@ -90,7 +89,7 @@ void ChecksumSink::stop(adaptive_engine::ExecutionContext& /*ctx*/)
     isOpen = false;
 }
 
-std::string ChecksumSink::get_id() const
+std::string ChecksumSink::getId() const
 {
     return std::string(NAME);
 }

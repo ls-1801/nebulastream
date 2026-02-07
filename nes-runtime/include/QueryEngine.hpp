@@ -14,13 +14,11 @@
 
 #pragma once
 
-#include <atomic>
 #include <memory>
-#include <thread>
 #include <unordered_map>
 #include <Identifiers/Identifiers.hpp>
 #include <QueryEngineConfiguration.hpp>
-#include <adaptive_engine/Engine.hpp>
+#include <Execution/NesQueryEngine.hpp>
 #include <folly/Synchronized.h>
 
 namespace NES
@@ -29,17 +27,14 @@ namespace NES
 struct ExecutableQueryPlan;
 class BufferManager;
 struct QueryLog;
-class NesBufferProvider;
 struct StatisticListener;
 
-/// The QueryEngine wraps the adaptive_engine::Engine and provides the NES-specific
+/// The QueryEngine wraps the NesQueryEngine and provides the NES-specific
 /// interface for starting, stopping, and managing query execution.
 ///
 /// This class bridges the gap between NES's query management (using LocalQueryId and
-/// ExecutableQueryPlan) and the adaptive_engine's execution model (using QueryId and
-/// QueryPlan).
-///
-/// All queries are executed through the adaptive engine path.
+/// ExecutableQueryPlan) and the engine's execution model (using QueryId and
+/// NesQueryPlan).
 class QueryEngine
 {
 public:
@@ -63,13 +58,13 @@ public:
 
     /// Start executing a query.
     /// This method takes ownership of the ExecutableQueryPlan and submits it to the
-    /// adaptive_engine::Engine for execution.
+    /// NesQueryEngine for execution.
     /// @param queryId The NES local query ID
     /// @param plan The executable query plan to execute
     void start(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPlan> plan);
 
     /// Stop a running query.
-    /// This method signals the adaptive_engine to stop the query identified by queryId.
+    /// This method signals the engine to stop the query identified by queryId.
     /// The actual termination may happen asynchronously.
     /// @param queryId The NES local query ID to stop
     void stop(LocalQueryId queryId);
@@ -77,12 +72,12 @@ public:
 private:
     /// Handle a QueryTerminated event from the adaptive engine.
     /// Called by the stats polling thread when a query finishes naturally.
-    void handleQueryTerminated(adaptive_engine::QueryId engineQueryId);
+    void handleQueryTerminated(NesQueryEngine::QueryId engineQueryId);
 
     /// Internal representation of a running query
     struct RunningQuery
     {
-        adaptive_engine::QueryId engineQueryId{0};
+        NesQueryEngine::QueryId engineQueryId{0};
         LocalQueryId nesQueryId;
         std::unique_ptr<ExecutableQueryPlan> plan;
     };
@@ -99,24 +94,14 @@ private:
     /// Buffer manager for allocations
     std::shared_ptr<BufferManager> bufferManager_;
 
-    /// Buffer provider wrapping the NES buffer manager
-    std::unique_ptr<NesBufferProvider> bufferProvider_;
-
-    /// The underlying adaptive execution engine
-    std::unique_ptr<adaptive_engine::Engine> engine_;
-
-    /// Statistics queue for receiving events from the adaptive engine
-    std::unique_ptr<adaptive_engine::StatsQueue> statsQueue_;
+    /// The underlying NES query engine
+    std::unique_ptr<NesQueryEngine> engine_;
 
     /// Worker thread ID for statistics events
     WorkerThreadId workerThreadId_;
 
     /// Map from NES LocalQueryId to RunningQuery
     folly::Synchronized<std::unordered_map<LocalQueryId, RunningQuery>> runningQueries_;
-
-    /// Background thread for polling statistics events
-    std::thread statsPollingThread_;
-    std::atomic<bool> stopPolling_{false};
 };
 
 }  // namespace NES

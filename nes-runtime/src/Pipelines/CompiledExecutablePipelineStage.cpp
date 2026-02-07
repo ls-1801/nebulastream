@@ -19,7 +19,6 @@
 #include <ostream>
 #include <unordered_map>
 #include <utility>
-#include <BufferManagement/NesBufferProvider.hpp>
 #include <Nautilus/Interface/RecordBuffer.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/TupleBuffer.hpp>
@@ -40,69 +39,48 @@ namespace NES
 namespace
 {
 
-/// Adapter class that bridges adaptive_engine::ExecutionContext to PipelineExecutionContext.
-/// This allows the internal NES ExecutionContext struct to work with the new adaptive_engine interface.
+/// Adapter class that bridges NesStageContext to PipelineExecutionContext.
+/// This allows the internal NES ExecutionContext struct to work with the NesPipelineStage interface.
 class PipelineExecutionContextAdapter final : public PipelineExecutionContext
 {
 public:
     explicit PipelineExecutionContextAdapter(
-        adaptive_engine::ExecutionContext& ctx,
+        NesStageContext& ctx,
         std::unordered_map<OperatorHandlerId, std::shared_ptr<OperatorHandler>>& handlers)
-        : adaptiveCtx_(ctx)
-        , nesProvider_(static_cast<NesBufferProvider*>(ctx.get_user_data()))
+        : nesCtx_(ctx)
         , operatorHandlers_(handlers)
     {
     }
 
     bool emitBuffer(const TupleBuffer& buffer, ContinuationPolicy /*policy*/) override
     {
-        // Create a NesBufferWrapper directly from the TupleBuffer (which increments ref count).
-        auto* wrapper = new NesBufferWrapper(buffer);
-        adaptive_engine::BufferHandle handle{wrapper};
-
-        // Emit through the adaptive context
-        adaptiveCtx_.emit_buffer(handle);
+        nesCtx_.emitBuffer(buffer);
         return true;
     }
 
     void repeatTask(const TupleBuffer& /*buffer*/, std::chrono::milliseconds /*delay*/) override
     {
-        // Pass a null handle — the Rust side preserves the original buffer.
-        adaptiveCtx_.repeat_task(adaptive_engine::BufferHandle{nullptr});
+        nesCtx_.repeatTask();
     }
 
     TupleBuffer allocateTupleBuffer() override
     {
-        auto handle = nesProvider_->allocate(0);  // Use default pool size
-        if (handle.opaque == nullptr)
-        {
-            throw std::runtime_error("Failed to allocate tuple buffer");
-        }
-
-        auto* wrapper = static_cast<NesBufferWrapper*>(handle.opaque);
-        TupleBuffer buffer = wrapper->buffer;
-
-        // Note: We copy the buffer, which increments refcount.
-        // The original handle's wrapper will be cleaned up separately.
-        // Release the wrapper since we copied the buffer out.
-        wrapper->do_release();
-        return buffer;
+        return nesCtx_.allocateBuffer();
     }
 
-    [[nodiscard]] WorkerThreadId getId() const override { return WorkerThreadId(adaptiveCtx_.get_worker_id()); }
+    [[nodiscard]] WorkerThreadId getId() const override { return WorkerThreadId(nesCtx_.getWorkerId()); }
 
     [[nodiscard]] uint64_t getNumberOfWorkerThreads() const override
     {
-        // TODO: Get actual number from context if available
         return 1;
     }
 
     [[nodiscard]] std::shared_ptr<AbstractBufferProvider> getBufferManager() const override
     {
-        return nesProvider_->getUnderlyingProvider();
+        return nesCtx_.getBufferProvider();
     }
 
-    [[nodiscard]] PipelineId getPipelineId() const override { return PipelineId(adaptiveCtx_.get_pipeline_id()); }
+    [[nodiscard]] PipelineId getPipelineId() const override { return PipelineId(nesCtx_.getPipelineId()); }
 
     std::unordered_map<OperatorHandlerId, std::shared_ptr<OperatorHandler>>& getOperatorHandlers() override
     {
@@ -115,8 +93,7 @@ public:
     }
 
 private:
-    adaptive_engine::ExecutionContext& adaptiveCtx_;
-    NesBufferProvider* nesProvider_;
+    NesStageContext& nesCtx_;
     std::unordered_map<OperatorHandlerId, std::shared_ptr<OperatorHandler>>& operatorHandlers_;
 };
 
@@ -139,21 +116,10 @@ CompiledExecutablePipelineStage::CompiledExecutablePipelineStage(
     }
 }
 
-void CompiledExecutablePipelineStage::execute(adaptive_engine::ExecutionContext& ctx, adaptive_engine::BufferHandle input)
+void CompiledExecutablePipelineStage::doExecute(NesStageContext& ctx, TupleBuffer& inputTupleBuffer)
 {
-    // Extract TupleBuffer from BufferHandle
-    if (input.opaque == nullptr)
-    {
-        throw std::runtime_error("Cannot execute with null buffer handle");
-    }
-
-    auto* wrapper = static_cast<NesBufferWrapper*>(input.opaque);
-    const TupleBuffer& inputTupleBuffer = wrapper->buffer;
-
-    // Create adapter to bridge adaptive context to PipelineExecutionContext
     PipelineExecutionContextAdapter adapter(ctx, operatorHandlers);
     adapter.setOperatorHandlers(operatorHandlers);
-
     Arena arena(adapter.getBufferManager());
     compiledPipelineFunction(std::addressof(adapter), std::addressof(inputTupleBuffer), std::addressof(arena));
 }
@@ -202,11 +168,10 @@ CompiledExecutablePipelineStage::compilePipeline() const
     std::unreachable();
 }
 
-void CompiledExecutablePipelineStage::stop(adaptive_engine::ExecutionContext& ctx)
+void CompiledExecutablePipelineStage::stop(NesStageContext& ctx)
 {
     PipelineExecutionContextAdapter adapter(ctx, operatorHandlers);
     adapter.setOperatorHandlers(operatorHandlers);
-
     Arena arena(adapter.getBufferManager());
     ExecutionContext nesCtx(std::addressof(adapter), std::addressof(arena));
     pipeline->getRootOperator().terminate(nesCtx);
@@ -217,11 +182,10 @@ std::ostream& CompiledExecutablePipelineStage::toString(std::ostream& os) const
     return os << "CompiledExecutablePipelineStage(" << stageId_ << ")";
 }
 
-void CompiledExecutablePipelineStage::start(adaptive_engine::ExecutionContext& ctx)
+void CompiledExecutablePipelineStage::start(NesStageContext& ctx)
 {
     PipelineExecutionContextAdapter adapter(ctx, operatorHandlers);
     adapter.setOperatorHandlers(operatorHandlers);
-
     Arena arena(adapter.getBufferManager());
     ExecutionContext nesCtx(std::addressof(adapter), std::addressof(arena));
     CompilationContext compilationCtx{engine};
@@ -229,7 +193,7 @@ void CompiledExecutablePipelineStage::start(adaptive_engine::ExecutionContext& c
     compiledPipelineFunction = this->compilePipeline();
 }
 
-std::string CompiledExecutablePipelineStage::get_id() const
+std::string CompiledExecutablePipelineStage::getId() const
 {
     return stageId_;
 }

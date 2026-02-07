@@ -23,7 +23,6 @@
 #include <system_error>
 #include <unordered_map>
 #include <utility>
-#include <adaptive_engine/ExecutionContext.hpp>
 
 #include <fmt/format.h>
 #include <magic_enum/magic_enum.hpp>
@@ -68,9 +67,9 @@ std::ostream& FileSink::toString(std::ostream& str) const
     return str;
 }
 
-/// --- adaptive_engine::PipelineStage interface (via NesPipelineStage) ---
+/// --- NesPipelineStage interface ---
 
-void FileSink::start(adaptive_engine::ExecutionContext& /*ctx*/)
+void FileSink::start(NesStageContext& /*ctx*/)
 {
     NES_DEBUG("Setting up file sink: {}", *this);
     const auto stream = outputFileStream.wlock();
@@ -107,7 +106,7 @@ void FileSink::start(adaptive_engine::ExecutionContext& /*ctx*/)
     }
 }
 
-void FileSink::doExecute(adaptive_engine::ExecutionContext& /*ctx*/, TupleBuffer& inputTupleBuffer)
+void FileSink::doExecute(NesStageContext& /*ctx*/, TupleBuffer& inputTupleBuffer)
 {
     PRECONDITION(inputTupleBuffer, "Invalid input buffer in FileSink.");
     PRECONDITION(isOpen, "Sink was not opened");
@@ -123,7 +122,7 @@ void FileSink::doExecute(adaptive_engine::ExecutionContext& /*ctx*/, TupleBuffer
     }
 }
 
-void FileSink::stop(adaptive_engine::ExecutionContext& /*ctx*/)
+void FileSink::stop(NesStageContext& /*ctx*/)
 {
     NES_DEBUG("Closing file sink, filePathOutput={}", outputFilePath);
     const auto stream = outputFileStream.wlock();
@@ -131,7 +130,7 @@ void FileSink::stop(adaptive_engine::ExecutionContext& /*ctx*/)
     stream->close();
 }
 
-std::string FileSink::get_id() const
+std::string FileSink::getId() const
 {
     return std::string(NAME);
 }

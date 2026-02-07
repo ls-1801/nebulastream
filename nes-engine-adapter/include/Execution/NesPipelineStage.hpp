@@ -14,57 +14,40 @@
 
 #pragma once
 
-#include <stdexcept>
-#include <adaptive_engine/Buffer.hpp>
-#include <adaptive_engine/ExecutionContext.hpp>
-#include <adaptive_engine/PipelineStage.hpp>
-#include <BufferManagement/NesBufferProvider.hpp>
+#include <string>
+#include <Execution/NesStageContext.hpp>
 #include <Runtime/TupleBuffer.hpp>
 
 namespace NES
 {
 
-/// Abstract base class that bridges adaptive_engine::PipelineStage to NES's TupleBuffer-based execution model.
-///
-/// This class handles the BufferHandle → TupleBuffer conversion in one place, so concrete NES pipeline stages
-/// and sinks only need to implement doExecute() with a TupleBuffer reference. The TupleBuffer is extracted from
-/// the NesBufferWrapper stored in the BufferHandle's opaque pointer. Reference counting is handled automatically
-/// via RAII — when the TupleBuffer copy goes out of scope after doExecute() returns, the ref count decrements.
+/// Abstract base class for NES pipeline stages.
 ///
 /// Subclasses must implement:
-/// - doExecute(ctx, buffer) — process a TupleBuffer
-/// - get_id() — return stage identifier
+/// - doExecute(ctx, buffer) -- process a TupleBuffer
+/// - getId()               -- return stage identifier
 ///
-/// start() and stop() have default empty implementations since many stages (especially sinks) don't need them.
-class NesPipelineStage : public adaptive_engine::PipelineStage
+/// start() and stop() have default empty implementations since many stages
+/// (especially sinks) don't need them.
+class NesPipelineStage
 {
 public:
-    ~NesPipelineStage() override = default;
+    virtual ~NesPipelineStage() = default;
 
     /// Called once when the pipeline starts. Default is no-op.
-    void start(adaptive_engine::ExecutionContext& /*ctx*/) override { }
+    virtual void start(NesStageContext& /*ctx*/) {}
 
-    /// Extracts TupleBuffer from BufferHandle and delegates to doExecute().
-    void execute(adaptive_engine::ExecutionContext& ctx, adaptive_engine::BufferHandle input) override
-    {
-        if (input.opaque == nullptr)
-        {
-            throw std::runtime_error("Cannot execute with null buffer handle");
-        }
-
-        auto* wrapper = static_cast<NesBufferWrapper*>(input.opaque);
-        TupleBuffer buffer = wrapper->buffer;  // copies TupleBuffer (increments ref count)
-        doExecute(ctx, buffer);
-    }  // buffer destructor decrements ref count
-
-    /// Called once when the pipeline stops. Default is no-op.
-    void stop(adaptive_engine::ExecutionContext& /*ctx*/) override { }
-
-protected:
     /// Process a TupleBuffer. Implemented by concrete NES pipeline stages and sinks.
     /// @param ctx Execution context for this invocation
     /// @param buffer The TupleBuffer to process
-    virtual void doExecute(adaptive_engine::ExecutionContext& ctx, TupleBuffer& buffer) = 0;
+    virtual void doExecute(NesStageContext& ctx, TupleBuffer& buffer) = 0;
+
+    /// Called once when the pipeline stops. Default is no-op.
+    virtual void stop(NesStageContext& /*ctx*/) {}
+
+    /// Get the unique identifier for this stage.
+    /// @return Stage identifier string
+    [[nodiscard]] virtual std::string getId() const = 0;
 };
 
 }  // namespace NES

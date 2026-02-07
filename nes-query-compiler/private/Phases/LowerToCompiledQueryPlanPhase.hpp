@@ -21,7 +21,8 @@
 
 #include <Identifiers/Identifiers.hpp>
 #include <Util/DumpMode.hpp>
-#include <adaptive_engine/PipelineStage.hpp>
+#include <Execution/NesPipelineStage.hpp>
+#include <Execution/NesQueryPlan.hpp>
 #include <CompiledQueryPlan.hpp>
 #include <PipelinedQueryPlan.hpp>
 
@@ -52,11 +53,11 @@ private:
     uint64_t processOperatorPipeline(const std::shared_ptr<Pipeline>& pipeline);
 
     /// Create a pipeline stage from a Pipeline
-    std::unique_ptr<adaptive_engine::PipelineStage> getStage(const std::shared_ptr<Pipeline>& pipeline);
+    std::unique_ptr<NesPipelineStage> getStage(const std::shared_ptr<Pipeline>& pipeline);
 
     /// Lowering context - populated during apply()
-    std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> stages_;
-    std::vector<adaptive_engine::Edge> edges_;
+    std::vector<std::unique_ptr<NesPipelineStage>> stages_;
+    std::vector<NesEdge> edges_;
     std::vector<CompiledQueryPlan::SourceInfo> sources_;
     std::vector<CompiledQueryPlan::PendingSink> pending_sinks_;
 

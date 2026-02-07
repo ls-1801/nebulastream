@@ -33,7 +33,7 @@ std::ostream& operator<<(std::ostream& os, const ExecutableQueryPlan& instantiat
 {
     os << "ExecutableQueryPlan(id=" << instantiatedQueryPlan.localQueryId
        << ", sources=" << instantiatedQueryPlan.sources.size()
-       << ", stages=" << instantiatedQueryPlan.getAdaptiveStages().size() << ")";
+       << ", stages=" << instantiatedQueryPlan.getStages().size() << ")";
     return os;
 }
 
@@ -47,22 +47,22 @@ ExecutableQueryPlan::instantiate(CompiledQueryPlan& compiledQueryPlan, const Sou
         throw NotImplemented("Currently our execution model expects exactly one sink per query plan");
     }
 
-    // Take ownership of the adaptive stages from the compiled plan.
+    // Take ownership of the stages from the compiled plan.
     // The stages vector includes nullptr placeholders at sink indices.
-    std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> ownedAdaptiveStages = std::move(compiledQueryPlan.stages);
+    std::vector<std::unique_ptr<NesPipelineStage>> ownedStages = std::move(compiledQueryPlan.stages);
 
     // Take the edges from the compiled plan (includes edges to sink stages)
-    std::vector<adaptive_engine::Edge> edges = std::move(compiledQueryPlan.edges);
+    std::vector<NesEdge> edges = std::move(compiledQueryPlan.edges);
 
     // Instantiate the sink from its descriptor and fill in the stages vector.
-    // Sink inherits from NesPipelineStage (adaptive_engine::PipelineStage), so the
-    // unique_ptr<Sink> upcasts to unique_ptr<PipelineStage> via public inheritance.
+    // Sink inherits from NesPipelineStage, so the
+    // unique_ptr<Sink> upcasts to unique_ptr<NesPipelineStage> via public inheritance.
     auto& pendingSink = compiledQueryPlan.pending_sinks.front();
     auto sink = lower(std::move(backpressureController), pendingSink.descriptor);
-    ownedAdaptiveStages[pendingSink.stage_index] = std::move(sink);
+    ownedStages[pendingSink.stage_index] = std::move(sink);
 
-    // Create adaptive-engine source handles from descriptors.
-    // These implement adaptive_engine::SourceHandle (pull model: open/next_buffer/close)
+    // Create source handles from descriptors.
+    // These implement NesSourceAdapter (pull model: open/nextBuffer/close)
     // and are driven by the engine's internal source threads.
     std::vector<std::unique_ptr<NesSourceHandle>> instantiatedSources;
     for (const auto& sourceInfo : compiledQueryPlan.sources)
@@ -84,7 +84,7 @@ ExecutableQueryPlan::instantiate(CompiledQueryPlan& compiledQueryPlan, const Sou
     return std::make_unique<ExecutableQueryPlan>(
         compiledQueryPlan.localQueryId,
         std::move(instantiatedSources),
-        std::move(ownedAdaptiveStages),
+        std::move(ownedStages),
         std::move(edges),
         std::move(source_to_stage));
 }
@@ -92,12 +92,12 @@ ExecutableQueryPlan::instantiate(CompiledQueryPlan& compiledQueryPlan, const Sou
 ExecutableQueryPlan::ExecutableQueryPlan(
     LocalQueryId localQueryId,
     std::vector<std::unique_ptr<NesSourceHandle>> instantiatedSources,
-    std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> ownedAdaptiveStages,
-    std::vector<adaptive_engine::Edge> edges,
+    std::vector<std::unique_ptr<NesPipelineStage>> stages,
+    std::vector<NesEdge> edges,
     std::vector<std::pair<uint64_t, uint64_t>> source_to_stage)
     : localQueryId(localQueryId)
     , sources(std::move(instantiatedSources))
-    , ownedAdaptiveStages_(std::move(ownedAdaptiveStages))
+    , stages_(std::move(stages))
     , edges_(std::move(edges))
     , source_to_stage_(std::move(source_to_stage))
 {

@@ -18,7 +18,6 @@
 #include <memory>
 #include <utility>
 #include <vector>
-#include <BufferManagement/NesBufferProvider.hpp>
 #include <ExecutableQueryPlan.hpp>
 #include <Listeners/QueryLog.hpp>
 #include <Listeners/StatisticListener.hpp>
@@ -26,16 +25,9 @@
 #include <Runtime/BufferManager.hpp>
 #include <Runtime/Execution/QueryStatus.hpp>
 #include <Util/Logger/Logger.hpp>
-#include <adaptive_engine/Engine.hpp>
 
 namespace NES
 {
-
-namespace
-{
-/// Event type values from FfiStatisticsEventType (Rust enum).
-constexpr uint32_t FFI_EVENT_QUERY_TERMINATED = 9;
-}  // namespace
 
 QueryEngine::QueryEngine(
     const QueryEngineConfiguration& config,
@@ -47,47 +39,15 @@ QueryEngine::QueryEngine(
     , statisticsListener_(std::move(statisticsListener))
     , queryLog_(std::move(queryLog))
     , bufferManager_(bufferManager)
-    , bufferProvider_(std::make_unique<NesBufferProvider>(bufferManager))
     , workerThreadId_(workerThreadId)
 {
     NES_INFO("Creating QueryEngine with {} worker threads", config_.numWorkerThreads.getValue());
 
-    // Create the adaptive engine with statistics collection enabled
-    engine_ = adaptive_engine::Engine::create_with_stats(static_cast<void*>(bufferProvider_.get()), statsQueue_);
-
-    // Start the engine's worker threads
+    engine_ = NesQueryEngine::create(bufferManager);
+    engine_->setQueryTerminatedCallback([this](NesQueryEngine::QueryId engineQueryId) {
+        handleQueryTerminated(engineQueryId);
+    });
     engine_->start();
-
-    // Start background thread to poll for statistics events (e.g. QueryTerminated)
-    if (statsQueue_)
-    {
-        stopPolling_.store(false);
-        statsPollingThread_ = std::thread([this]()
-        {
-            while (!stopPolling_.load())
-            {
-                uint32_t eventType = 0;
-                uint64_t workerId = 0;
-                uint64_t queryId = 0;
-                std::string pipelineId;
-                std::string toPipelineId;
-                uint64_t taskId = 0;
-
-                bool got = statsQueue_->poll(50, eventType, workerId, queryId,
-                                             pipelineId, toPipelineId, taskId);
-                if (!got)
-                {
-                    continue;
-                }
-
-                if (eventType == FFI_EVENT_QUERY_TERMINATED)
-                {
-                    NES_DEBUG("Received QueryTerminated event for engine query {}", queryId);
-                    handleQueryTerminated(queryId);
-                }
-            }
-        });
-    }
 
     NES_INFO("QueryEngine started successfully");
 }
@@ -96,21 +56,11 @@ QueryEngine::~QueryEngine()
 {
     NES_INFO("Shutting down QueryEngine");
 
-    // Stop the polling thread before engine shutdown
-    stopPolling_.store(true);
-    if (statsPollingThread_.joinable())
-    {
-        statsPollingThread_.join();
-    }
-
-    // Shutdown the adaptive engine (stops all queries and worker threads).
-    // This destroys stages/sources owned by the engine via source_destroy/stage_destroy.
     if (engine_)
     {
         engine_->shutdown();
     }
 
-    // Clear running queries (plans no longer own stages/sources after releaseOwnership)
     runningQueries_.wlock()->clear();
 
     NES_INFO("QueryEngine shutdown complete");
@@ -120,36 +70,27 @@ void QueryEngine::start(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPla
 {
     NES_INFO("Starting query {}", queryId);
 
-    // Build the adaptive_engine::QueryPlan from the ExecutableQueryPlan
-    adaptive_engine::QueryPlan queryPlan;
+    // Build a NesQueryPlan from the ExecutableQueryPlan
+    NesQueryPlan queryPlan;
 
-    // Get the stages from the plan
-    const auto& adaptiveStages = plan->getAdaptiveStages();
-    queryPlan.stages.reserve(adaptiveStages.size());
-    for (const auto& stage : adaptiveStages)
-    {
-        queryPlan.stages.push_back(stage.get());
-    }
+    // Move stages from the plan
+    queryPlan.stages = plan->takeStages();
 
-    // Get the edges
+    // Copy edges
     queryPlan.edges = plan->getEdges();
 
-    // Get the sources (NesSourceHandle implements adaptive_engine::SourceHandle)
+    // Move sources (NesSourceHandle IS-A NesSourceAdapter)
     queryPlan.sources.reserve(plan->sources.size());
-    for (const auto& source : plan->sources)
+    for (auto& source : plan->sources)
     {
-        queryPlan.sources.push_back(source.get());
+        queryPlan.sources.push_back(std::move(source));
     }
 
-    // Get the source-to-stage mappings
-    queryPlan.source_to_stage = plan->getSourceToStage();
+    // Copy source-to-stage mappings
+    queryPlan.sourceToStage = plan->getSourceToStage();
 
     // Submit the query to the engine
-    adaptive_engine::QueryId engineQueryId = engine_->submit_query(queryPlan, nullptr);
-
-    // Release ownership of stages and sources - the Rust engine now owns them
-    // and will destroy them via source_destroy/stage_destroy on shutdown/stop.
-    plan->releaseOwnership();
+    NesQueryEngine::QueryId engineQueryId = engine_->submitQuery(std::move(queryPlan));
 
     // Store the mapping and the plan
     runningQueries_.wlock()->emplace(
@@ -198,8 +139,8 @@ void QueryEngine::stop(LocalQueryId queryId)
         return;
     }
 
-    // Stop the query in the adaptive engine
-    bool stopped = engine_->stop_query(query->engineQueryId);
+    // Stop the query in the engine
+    bool stopped = engine_->stopQuery(query->engineQueryId);
 
     if (stopped)
     {
@@ -223,7 +164,7 @@ void QueryEngine::stop(LocalQueryId queryId)
     }
 }
 
-void QueryEngine::handleQueryTerminated(adaptive_engine::QueryId engineQueryId)
+void QueryEngine::handleQueryTerminated(NesQueryEngine::QueryId engineQueryId)
 {
     // Find the NES query ID corresponding to this engine query ID
     std::optional<LocalQueryId> nesQueryId;
