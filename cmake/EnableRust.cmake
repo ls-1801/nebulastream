@@ -11,7 +11,8 @@
 # limitations under the License.
 
 # Unfortunately, compiling rust with sanitizers requires the nightly compiler.
-SET(Rust_RESOLVE_RUSTUP_TOOLCHAINS OFF)
+# Note: Rust_RESOLVE_RUSTUP_TOOLCHAINS must stay ON (corrosion default) for
+# Rust_TOOLCHAIN to be resolved correctly across repeated cmake configures.
 SET(Rust_TOOLCHAIN "nightly")
 
 set(CXXFLAGS_LIST "-std=c++23")

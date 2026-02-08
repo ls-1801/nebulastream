@@ -269,6 +269,7 @@ impl TaskQueue for PriorityQueue {
 mod tests {
     use super::*;
     use crate::pipeline::{Buffer, PipelineId};
+    use std::sync::Weak;
     #[test]
     fn test_fifo_queue_ordering() {
         let mut queue = FifoQueue::new();
@@ -313,6 +314,7 @@ mod tests {
         queue.push(Task::WorkTask {
             query_id: 0,
             pipeline_id: PipelineId::new("p1"),
+            node: Weak::new(),
             buffer: Buffer::new(vec![1]),
         });
         queue.push(Task::Shutdown);
@@ -339,6 +341,7 @@ mod tests {
             queue.push(Task::WorkTask {
                 query_id: 0,
                 pipeline_id: PipelineId::new(format!("p{}", i)),
+                node: Weak::new(),
                 buffer: Buffer::new(vec![i as u8]),
             });
         }

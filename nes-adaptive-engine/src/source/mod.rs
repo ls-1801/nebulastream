@@ -95,9 +95,10 @@ pub mod wrapper;
 
 use crate::executor::queue::TaskQueue;
 use crate::executor::task::Task;
+use crate::graph::PipelineNode;
 use crate::pipeline::{Buffer, PipelineId};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use thiserror::Error;
 
 /// Error types for source operations.
@@ -263,6 +264,7 @@ pub trait Source: Send + Sync {
 pub struct SourceEmitHandle {
     source_id: PipelineId,
     query_id: u64,
+    node: Weak<PipelineNode>,
     task_queue: Arc<Mutex<Box<dyn TaskQueue>>>,
     stop_requested: Arc<AtomicBool>,
     task_available: Arc<std::sync::Condvar>,
@@ -284,6 +286,7 @@ impl SourceEmitHandle {
     pub(crate) fn new(
         source_id: PipelineId,
         query_id: u64,
+        node: Weak<PipelineNode>,
         task_queue: Arc<Mutex<Box<dyn TaskQueue>>>,
         stop_requested: Arc<AtomicBool>,
         task_available: Arc<std::sync::Condvar>,
@@ -291,6 +294,7 @@ impl SourceEmitHandle {
         Self {
             source_id,
             query_id,
+            node,
             task_queue,
             stop_requested,
             task_available,
@@ -318,6 +322,7 @@ impl SourceEmitHandle {
         let task = Task::WorkTask {
             query_id: self.query_id,
             pipeline_id: self.source_id.clone(),
+            node: self.node.clone(),
             buffer,
         };
 

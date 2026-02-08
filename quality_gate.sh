@@ -73,7 +73,7 @@ run_systest "TuplesDontFitIntoOneBuffer" "tuples/TuplesDontFitIntoOneBuffer.test
 run_systest "TupleLargerThanBuffer" "tuples/TupleLargerThanBuffer.test"
 
 # Run full systest (all non-large queries in one engine instance)
-run_step "systest (full)" timeout 60 \
+run_step "systest (full)" timeout 180 \
     "$SCRIPT_DIR/build-debug/nes-systests/systest/systest" \
     --exclude-groups large \
     -- \

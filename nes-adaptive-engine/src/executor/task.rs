@@ -18,8 +18,9 @@
 //! task queue for processing by the single execution thread.
 
 use crate::executor::QueryId;
-use crate::graph::PipelineGraph;
+use crate::graph::{PipelineGraph, PipelineNode};
 use crate::pipeline::{Buffer, PipelineId};
+use std::sync::Weak;
 
 /// Task variants for the execution engine.
 ///
@@ -34,6 +35,8 @@ pub enum Task {
         query_id: QueryId,
         /// ID of the pipeline to execute
         pipeline_id: PipelineId,
+        /// Direct weak reference to the pipeline node (avoids global metadata lookup)
+        node: Weak<PipelineNode>,
         /// Buffer to process
         buffer: Buffer,
     },

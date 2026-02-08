@@ -55,8 +55,10 @@
 //! graph.validate().unwrap();
 //! ```
 
+use crate::executor::metadata::PipelineMetadata;
 use crate::pipeline::{Pipeline, PipelineId};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 use thiserror::Error;
 
 /// Errors that can occur during graph operations.
@@ -79,6 +81,42 @@ pub enum GraphError {
     InvalidStructure(String),
 }
 
+/// A pipeline bundled with its runtime metadata in a single allocation.
+///
+/// `PipelineNode` wraps a pipeline implementation and its associated
+/// `PipelineMetadata` so that hot-path operations can access both through
+/// a single `Arc` pointer -- eliminating the need for a global metadata
+/// `HashMap` lookup.
+pub struct PipelineNode {
+    pipeline: Box<dyn Pipeline>,
+    metadata: PipelineMetadata,
+}
+
+impl PipelineNode {
+    /// Create a new pipeline node with default metadata.
+    pub fn new(pipeline: Box<dyn Pipeline>) -> Self {
+        Self {
+            pipeline,
+            metadata: PipelineMetadata::new(),
+        }
+    }
+
+    /// Get a reference to the underlying pipeline.
+    pub fn pipeline(&self) -> &dyn Pipeline {
+        &*self.pipeline
+    }
+
+    /// Get a reference to this node's metadata.
+    pub fn metadata(&self) -> &PipelineMetadata {
+        &self.metadata
+    }
+
+    /// Get this node's pipeline ID.
+    pub fn id(&self) -> &PipelineId {
+        self.pipeline.id()
+    }
+}
+
 /// Directed acyclic graph (DAG) of pipelines.
 ///
 /// `PipelineGraph` maintains a collection of pipelines and their
@@ -87,7 +125,7 @@ pub enum GraphError {
 /// Sources are special nodes with no predecessors that generate data.
 /// They are tracked separately to enable source-specific operations.
 pub struct PipelineGraph {
-    nodes: HashMap<PipelineId, Box<dyn Pipeline>>,
+    nodes: HashMap<PipelineId, Arc<PipelineNode>>,
     edges: HashMap<PipelineId, Vec<PipelineId>>,
     reverse_edges: HashMap<PipelineId, Vec<PipelineId>>,
     /// Set of pipeline IDs that are sources (nodes that generate data).
@@ -151,7 +189,8 @@ impl PipelineGraph {
             return Err(GraphError::DuplicateId(id));
         }
 
-        self.nodes.insert(id.clone(), pipeline);
+        self.nodes
+            .insert(id.clone(), Arc::new(PipelineNode::new(pipeline)));
         self.edges.insert(id.clone(), Vec::new());
         self.reverse_edges.insert(id, Vec::new());
 
@@ -383,7 +422,23 @@ impl PipelineGraph {
     /// assert!(graph.get_pipeline(&id).is_some());
     /// ```
     pub fn get_pipeline(&self, id: &PipelineId) -> Option<&dyn Pipeline> {
-        self.nodes.get(id).map(|p| p.as_ref())
+        self.nodes.get(id).map(|node| node.pipeline())
+    }
+
+    /// Get a reference to the Arc-wrapped pipeline node by ID.
+    ///
+    /// This is used by the executor to obtain `Arc<PipelineNode>` references
+    /// for creating `Weak` pointers in `WorkTask`s, avoiding global metadata lookups.
+    pub fn get_node(&self, id: &PipelineId) -> Option<&Arc<PipelineNode>> {
+        self.nodes.get(id)
+    }
+
+    /// Remove a pipeline node from the graph, returning it if it existed.
+    ///
+    /// Once removed, all `Weak<PipelineNode>` references to this node will
+    /// fail to upgrade once all remaining `Arc` clones are dropped.
+    pub fn remove_node(&mut self, id: &PipelineId) -> Option<Arc<PipelineNode>> {
+        self.nodes.remove(id)
     }
 
     /// Get the successors (outgoing edges) for a pipeline.
@@ -718,7 +773,8 @@ impl PipelineGraph {
 
         // Wrap the source in a SourcePipeline and add it as a pipeline node
         let wrapper = Box::new(SourcePipeline::new(source));
-        self.nodes.insert(id.clone(), wrapper);
+        self.nodes
+            .insert(id.clone(), Arc::new(PipelineNode::new(wrapper)));
         self.edges.insert(id.clone(), Vec::new());
         self.reverse_edges.insert(id, Vec::new());
 
@@ -798,9 +854,9 @@ impl PipelineGraph {
         &self,
         id: &PipelineId,
     ) -> Option<&crate::source::wrapper::SourcePipeline> {
-        self.nodes.get(id).and_then(|pipeline| {
+        self.nodes.get(id).and_then(|node| {
             // Try to downcast to SourcePipeline
-            let pipeline_ref: &dyn Pipeline = &**pipeline;
+            let pipeline_ref: &dyn Pipeline = node.pipeline();
             let any_ref = pipeline_ref as &dyn std::any::Any;
             any_ref.downcast_ref::<crate::source::wrapper::SourcePipeline>()
         })

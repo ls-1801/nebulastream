@@ -248,6 +248,7 @@ mod tests {
     use super::*;
     use crate::executor::queue::FifoQueue;
     use crate::pipeline::{Buffer, PipelineId};
+    use std::sync::Weak;
     use std::time::Instant;
 
     fn make_condvar() -> Arc<std::sync::Condvar> {
@@ -278,6 +279,7 @@ mod tests {
         let task = Task::WorkTask {
             query_id: 0,
             pipeline_id: PipelineId::new("test"),
+            node: Weak::new(),
             buffer: Buffer::new(vec![1, 2, 3]),
         };
         assert!(handle.submit_delayed(task, 0));
@@ -308,6 +310,7 @@ mod tests {
         let task = Task::WorkTask {
             query_id: 0,
             pipeline_id: PipelineId::new("test"),
+            node: Weak::new(),
             buffer: Buffer::new(vec![1, 2, 3]),
         };
         assert!(handle.submit_delayed(task, 50));
@@ -345,6 +348,7 @@ mod tests {
         let task = Task::WorkTask {
             query_id: 0,
             pipeline_id: PipelineId::new("test"),
+            node: Weak::new(),
             buffer: Buffer::new(vec![1, 2, 3]),
         };
         assert!(handle.submit_delayed(task, 10000)); // 10 second delay
@@ -372,11 +376,13 @@ mod tests {
         let task1 = Task::WorkTask {
             query_id: 0,
             pipeline_id: PipelineId::new("test1"),
+            node: Weak::new(),
             buffer: Buffer::new(vec![1]),
         };
         let task2 = Task::WorkTask {
             query_id: 0,
             pipeline_id: PipelineId::new("test2"),
+            node: Weak::new(),
             buffer: Buffer::new(vec![2]),
         };
 

@@ -129,14 +129,13 @@ pub use stats::{StatisticsEvent, StatisticsSender, TaskId, WorkerId};
 
 /// Unique identifier for a submitted query.
 pub type QueryId = u64;
-use crate::graph::PipelineGraph;
+use crate::graph::{PipelineGraph, PipelineNode};
 use crate::pipeline::{Buffer, PipelineId};
 use error::{EntityType, ExecutionError, TaskType};
-use metadata::PipelineMetadata;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::channel;
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 use std::time::Duration;
 use task::Task;
 
@@ -257,7 +256,6 @@ static NEXT_EXECUTOR_QUERY_ID: std::sync::atomic::AtomicU64 = std::sync::atomic:
 #[derive(Clone)]
 pub struct ExecutorHandle {
     task_queue: Arc<Mutex<Box<dyn TaskQueue>>>,
-    pub(crate) metadata: Arc<Mutex<HashMap<PipelineId, Arc<PipelineMetadata>>>>,
     /// Multi-query graph storage: maps QueryId to QueryState.
     queries: Arc<RwLock<HashMap<QueryId, QueryState>>>,
     /// Flag set by shutdown() - executor thread pushes Shutdown task when last query completes.
@@ -298,19 +296,30 @@ impl ExecutorHandle {
         // happening when tasks are processed. This is necessary because sources don't know
         // their query ID at emit time.
 
-        // Increment pending task counter before enqueueing
-        {
-            let metadata = self
-                .metadata
-                .lock()
-                .map_err(|e| ExecutorError::TaskQueue(format!("Metadata lock poisoned: {}", e)))?;
+        // Look up the pipeline node from the graph, increment pending, and get a Weak ref
+        let node_weak = {
+            let queries = self
+                .queries
+                .read()
+                .map_err(|e| ExecutorError::TaskQueue(format!("Queries lock poisoned: {}", e)))?;
 
-            if let Some(meta) = metadata.get(&pipeline_id) {
-                meta.increment_pending();
+            let mut found_node: Option<&Arc<PipelineNode>> = None;
+            for query_state in queries.values() {
+                if let Some(node) = query_state.graph.get_node(&pipeline_id) {
+                    found_node = Some(node);
+                    break;
+                }
             }
-            // If metadata doesn't exist, the pipeline hasn't been started yet
-            // We'll still enqueue the task and let the executor handle the error
-        }
+
+            if let Some(node) = found_node {
+                node.metadata().increment_pending();
+                Arc::downgrade(node)
+            } else {
+                // Pipeline not found - still enqueue with an empty Weak so the executor
+                // can handle the error at dequeue time
+                Weak::new()
+            }
+        };
 
         // Enqueue work task
         {
@@ -322,6 +331,7 @@ impl ExecutorHandle {
             queue.push(Task::WorkTask {
                 query_id: 0, // TODO: US-006 will add proper multi-query tracking
                 pipeline_id,
+                node: node_weak,
                 buffer,
             });
         }
@@ -490,16 +500,9 @@ impl ExecutorHandle {
         let source_ids: Vec<PipelineId> = query_state.graph.get_sources();
 
         // Set source stop flags so CppSourceAdapter threads terminate.
-        {
-            let metadata = self
-                .metadata
-                .lock()
-                .map_err(|e| ExecutorError::TaskQueue(format!("Metadata lock poisoned: {}", e)))?;
-
-            for source_id in &source_ids {
-                if let Some(meta) = metadata.get(source_id) {
-                    meta.request_source_stop();
-                }
+        for source_id in &source_ids {
+            if let Some(node) = query_state.graph.get_node(source_id) {
+                node.metadata().request_source_stop();
             }
         }
 
@@ -598,7 +601,6 @@ pub(crate) struct ExecutorShared {
     /// Multi-query graph storage: maps QueryId to QueryState.
     queries: Arc<RwLock<HashMap<QueryId, QueryState>>>,
     task_queue: Arc<Mutex<Box<dyn TaskQueue>>>,
-    metadata: Arc<Mutex<HashMap<PipelineId, Arc<PipelineMetadata>>>>,
     /// Handle for the delayed task submitter (for repeat_task re-queueing)
     delayed_submitter_handle: Option<DelayedTaskSubmitterHandle>,
     /// Statistics event sender for observability
@@ -644,23 +646,15 @@ impl ExecutorShared {
         worker_id: usize,
         query_id: QueryId,
         pipeline_id: &PipelineId,
+        node: Arc<PipelineNode>,
         buffer: Buffer,
         stats: &mut ExecutionStats,
     ) {
-        // Check that pipeline metadata exists (may have been removed by terminate_query)
-        {
-            let metadata = self.metadata.lock().unwrap();
-            let Some(meta) = metadata.get(pipeline_id) else {
-                // Pipeline was terminated - skip this task
-                stats.tasks_skipped += 1;
-                return;
-            };
-
-            if !meta.is_setup_succeeded() {
-                // Pipeline hasn't completed setup - skip this task
-                stats.tasks_skipped += 1;
-                return;
-            }
+        // Check that setup succeeded (direct atomic read, no lock)
+        if !node.metadata().is_setup_succeeded() {
+            // Pipeline hasn't completed setup - skip this task
+            stats.tasks_skipped += 1;
+            return;
         }
 
         // Read-lock the queries and find the graph for this query
@@ -682,7 +676,7 @@ impl ExecutorShared {
             );
             stats.errors_encountered += 1;
             drop(queries_guard);
-            self.decrement_ref_and_check_stop(pipeline_id, stats);
+            self.decrement_ref_and_check_stop(&node, pipeline_id, stats);
             return;
         };
         let graph = &query_state.graph;
@@ -696,13 +690,8 @@ impl ExecutorShared {
             return;
         }
 
-        // Get the pipeline
-        let Some(pipeline) = graph.get_pipeline(pipeline_id) else {
-            eprintln!("Error: Pipeline not found: {}", pipeline_id);
-            stats.errors_encountered += 1;
-            self.decrement_ref_and_check_stop(pipeline_id, stats);
-            return;
-        };
+        // Get the pipeline from the node (direct deref, no graph lookup)
+        let pipeline = node.pipeline();
 
         // Create channel for context-emitted buffers
         let (emit_tx, emit_rx) = channel();
@@ -745,20 +734,16 @@ impl ExecutorShared {
                 if let Some(repeat_buffer) = context.take_repeat_buffer() {
                     let delay_ms = context.get_repeat_delay_ms();
 
+                    // Increment pending counter before enqueueing the repeat task
+                    node.metadata().increment_pending();
+
                     // Re-enqueue the buffer as-is (no copy, no modification)
                     let repeat_task = Task::WorkTask {
                         query_id,
                         pipeline_id: pipeline_id.clone(),
+                        node: Arc::downgrade(&node),
                         buffer: repeat_buffer,
                     };
-
-                    // Increment pending counter before enqueueing the repeat task
-                    {
-                        let metadata = self.metadata.lock().unwrap();
-                        if let Some(meta) = metadata.get(pipeline_id) {
-                            meta.increment_pending();
-                        }
-                    }
 
                     if delay_ms == 0 {
                         // Immediate re-queue
@@ -852,7 +837,7 @@ impl ExecutorShared {
 
         // Always decrement reference count after execution (success path only)
         drop(queries_guard);
-        self.decrement_ref_and_check_stop(pipeline_id, stats);
+        self.decrement_ref_and_check_stop(&node, pipeline_id, stats);
     }
 
     /// Route output buffers to successor pipelines.
@@ -919,20 +904,28 @@ impl ExecutorShared {
                     );
                 }
 
-                self.enqueue_work_task(query_id, successor_id.clone(), buffer_to_send);
+                if let Some(successor_node) = graph.get_node(successor_id) {
+                    self.enqueue_work_task(
+                        query_id,
+                        successor_id.clone(),
+                        successor_node,
+                        buffer_to_send,
+                    );
+                }
             }
         }
     }
 
     /// Enqueue a work task for a pipeline.
-    fn enqueue_work_task(&self, query_id: QueryId, pipeline_id: PipelineId, buffer: Buffer) {
-        // Increment pending task counter
-        {
-            let metadata = self.metadata.lock().unwrap();
-            if let Some(meta) = metadata.get(&pipeline_id) {
-                meta.increment_pending();
-            }
-        }
+    fn enqueue_work_task(
+        &self,
+        query_id: QueryId,
+        pipeline_id: PipelineId,
+        node: &Arc<PipelineNode>,
+        buffer: Buffer,
+    ) {
+        // Increment pending task counter (direct atomic, no lock)
+        node.metadata().increment_pending();
 
         // Enqueue the task
         {
@@ -940,6 +933,7 @@ impl ExecutorShared {
             queue.push(Task::WorkTask {
                 query_id,
                 pipeline_id,
+                node: Arc::downgrade(node),
                 buffer,
             });
         }
@@ -986,14 +980,10 @@ impl ExecutorShared {
                 let graph = &query_state.graph;
 
                 for pipeline_id in &pipeline_ids {
-                    // Create metadata with auto-configured expected sources
+                    // Configure expected sources on the node's metadata
                     let expected_sources = graph.count_predecessors(pipeline_id);
-                    let meta = Arc::new(PipelineMetadata::new());
-                    meta.set_expected_sources(expected_sources);
-
-                    {
-                        let mut metadata = self.metadata.lock().unwrap();
-                        metadata.insert(pipeline_id.clone(), meta);
+                    if let Some(node) = graph.get_node(pipeline_id) {
+                        node.metadata().set_expected_sources(expected_sources);
                     }
 
                     // Call setup() on the pipeline
@@ -1009,9 +999,8 @@ impl ExecutorShared {
 
                         match pipeline.setup(&context) {
                             Ok(()) => {
-                                let metadata = self.metadata.lock().unwrap();
-                                if let Some(meta) = metadata.get(pipeline_id) {
-                                    meta.mark_setup_succeeded();
+                                if let Some(node) = graph.get_node(pipeline_id) {
+                                    node.metadata().mark_setup_succeeded();
                                 }
                                 successfully_setup.push(pipeline_id.clone());
                                 stats.pipelines_started += 1;
@@ -1132,16 +1121,21 @@ impl ExecutorShared {
             };
 
             let successors = graph.get_successors(pipeline_id).to_vec();
-            let metadata = self.metadata.lock().unwrap();
-            let should_teardown = metadata
-                .get(pipeline_id)
-                .map(|meta| meta.is_setup_succeeded())
+            let should_teardown = graph
+                .get_node(pipeline_id)
+                .map(|node| node.metadata().is_setup_succeeded())
                 .unwrap_or(false);
             (successors, should_teardown, qid)
         };
 
         if !should_teardown {
-            self.metadata.lock().unwrap().remove(pipeline_id);
+            // Remove the node from the graph
+            {
+                let mut queries_guard = self.queries.write().unwrap();
+                if let Some(qs) = queries_guard.get_mut(&query_id) {
+                    qs.graph.remove_node(pipeline_id);
+                }
+            }
             stats.pipelines_stopped += 1;
             return;
         }
@@ -1213,8 +1207,13 @@ impl ExecutorShared {
 
             stats.errors_encountered += 1;
 
-            // Remove this pipeline's metadata
-            self.metadata.lock().unwrap().remove(pipeline_id);
+            // Remove the node from the graph
+            {
+                let mut queries_guard = self.queries.write().unwrap();
+                if let Some(qs) = queries_guard.get_mut(&query_id) {
+                    qs.graph.remove_node(pipeline_id);
+                }
+            }
             stats.pipelines_stopped += 1;
 
             // Terminate the entire query - remaining pipelines are just dropped
@@ -1252,11 +1251,9 @@ impl ExecutorShared {
             {
                 if query_state.graph.is_source(pipeline_id) {
                     // Set the stop flag so the source thread's should_stop() returns true
-                    let metadata = self.metadata.lock().unwrap();
-                    if let Some(meta) = metadata.get(pipeline_id) {
-                        meta.request_source_stop();
+                    if let Some(node) = query_state.graph.get_node(pipeline_id) {
+                        node.metadata().request_source_stop();
                     }
-                    drop(metadata);
 
                     // Call stop_source() to signal the source
                     if let Some(source_pipeline) =
@@ -1338,8 +1335,13 @@ impl ExecutorShared {
         };
 
         if teardown_failed {
-            // Remove this pipeline's metadata first (it already threw during stop)
-            self.metadata.lock().unwrap().remove(pipeline_id);
+            // Remove the node from the graph (it already threw during stop)
+            {
+                let mut queries_guard = self.queries.write().unwrap();
+                if let Some(qs) = queries_guard.get_mut(&query_id) {
+                    qs.graph.remove_node(pipeline_id);
+                }
+            }
             stats.pipelines_stopped += 1;
 
             // Terminate the entire query - remaining pipelines are just dropped
@@ -1364,8 +1366,13 @@ impl ExecutorShared {
         }
         self.task_available.notify_all();
 
-        // 7. Remove metadata
-        self.metadata.lock().unwrap().remove(pipeline_id);
+        // 7. Remove the node from the graph
+        {
+            let mut queries_guard = self.queries.write().unwrap();
+            if let Some(qs) = queries_guard.get_mut(&query_id) {
+                qs.graph.remove_node(pipeline_id);
+            }
+        }
         stats.pipelines_stopped += 1;
 
         // 8. Check if this was the last pipeline for the query.
@@ -1373,11 +1380,7 @@ impl ExecutorShared {
         let all_query_pipelines_stopped = {
             let queries_guard = self.queries.read().unwrap();
             if let Some(qs) = queries_guard.get(&query_id) {
-                let metadata = self.metadata.lock().unwrap();
-                qs.graph
-                    .get_all_pipeline_ids()
-                    .iter()
-                    .all(|pid| !metadata.contains_key(pid))
+                qs.graph.is_empty()
             } else {
                 false
             }
@@ -1409,10 +1412,7 @@ impl ExecutorShared {
                     .query_terminated(worker_id as u64, query_id);
 
                 // If engine is shutting down and all queries are done, push Shutdown
-                if self.shutting_down.load(Ordering::SeqCst)
-                    && queries_guard.is_empty()
-                    && self.metadata.lock().unwrap().is_empty()
-                {
+                if self.shutting_down.load(Ordering::SeqCst) && queries_guard.is_empty() {
                     self.task_queue.lock().unwrap().push(Task::Shutdown);
                     self.task_available.notify_all();
                 }
@@ -1451,14 +1451,13 @@ impl ExecutorShared {
             return;
         };
 
-        // Get the shared stop flag from metadata so stop_query() can signal
-        // the source thread to stop in real-time
-        let stop_flag = {
-            let metadata = self.metadata.lock().unwrap();
-            if let Some(meta) = metadata.get(source_id) {
-                meta.get_source_stop_flag()
+        // Get the shared stop flag and Weak ref from the node's metadata so stop_query()
+        // can signal the source thread to stop in real-time
+        let (stop_flag, node_weak) = {
+            if let Some(node) = query_state.graph.get_node(source_id) {
+                (node.metadata().get_source_stop_flag(), Arc::downgrade(node))
             } else {
-                eprintln!("Metadata for source {} not found", source_id);
+                eprintln!("Node for source {} not found", source_id);
                 stats.errors_encountered += 1;
                 return;
             }
@@ -1468,6 +1467,7 @@ impl ExecutorShared {
         let emit_handle = SourceEmitHandle::new(
             source_id.clone(),
             query_id,
+            node_weak,
             self.task_queue.clone(),
             stop_flag,
             Arc::clone(&self.task_available),
@@ -1476,9 +1476,8 @@ impl ExecutorShared {
         // Start the source
         match source_pipeline.start_source(emit_handle) {
             Ok(()) => {
-                let metadata = self.metadata.lock().unwrap();
-                if let Some(meta) = metadata.get(source_id) {
-                    meta.mark_source_started();
+                if let Some(node) = query_state.graph.get_node(source_id) {
+                    node.metadata().mark_source_started();
                 }
 
                 // Track sources started for QueryRunning event
@@ -1569,8 +1568,8 @@ impl ExecutorShared {
 
     /// Execute an end-of-stream task.
     ///
-    /// Performs EOS counting, termination request, and stop-check under a single
-    /// metadata lock to prevent TOCTOU races with concurrent decrements.
+    /// Performs EOS counting, termination request, and stop-check using
+    /// atomic operations on the node's metadata.
     fn execute_eos_task(
         &self,
         _source_id: &PipelineId,
@@ -1578,9 +1577,13 @@ impl ExecutorShared {
         _stats: &mut ExecutionStats,
     ) {
         let should_stop = {
-            let metadata = self.metadata.lock().unwrap();
+            let queries_guard = self.queries.read().unwrap();
+            let node = queries_guard
+                .values()
+                .find_map(|qs| qs.graph.get_node(pipeline_id));
 
-            if let Some(meta) = metadata.get(pipeline_id) {
+            if let Some(node) = node {
+                let meta = node.metadata();
                 // Increment EOS counter
                 let eos_count = meta.increment_eos();
                 let expected = meta.get_expected_sources();
@@ -1619,19 +1622,19 @@ impl ExecutorShared {
 
     /// Decrement reference count and check if pipeline should be stopped.
     ///
-    /// Performs both the decrement and the stop-check under a single metadata lock
-    /// to prevent TOCTOU races with concurrent EOS processing or other decrements.
-    fn decrement_ref_and_check_stop(&self, pipeline_id: &PipelineId, _stats: &mut ExecutionStats) {
+    /// Uses atomic operations on the node's metadata (no locks needed).
+    fn decrement_ref_and_check_stop(
+        &self,
+        node: &Arc<PipelineNode>,
+        pipeline_id: &PipelineId,
+        _stats: &mut ExecutionStats,
+    ) {
+        let meta = node.metadata();
         let should_stop = {
-            let metadata = self.metadata.lock().unwrap();
-            if let Some(meta) = metadata.get(pipeline_id) {
-                meta.decrement_pending();
-                meta.should_terminate()
-                    && meta.get_pending() == 0
-                    && !meta.stop_task_enqueued.swap(true, Ordering::SeqCst)
-            } else {
-                false
-            }
+            meta.decrement_pending();
+            meta.should_terminate()
+                && meta.get_pending() == 0
+                && !meta.stop_task_enqueued.swap(true, Ordering::SeqCst)
         };
 
         if should_stop {
@@ -1681,38 +1684,36 @@ impl ExecutorShared {
     /// On error, pipelines are just dropped (destroyed).
     fn terminate_query(&self, query_id: QueryId, stats: &mut ExecutionStats) {
         // Collect errors and source IDs from the query before modifying state
-        let (pipeline_ids_to_remove, errors, source_ids) = {
+        let (pipeline_count, errors, source_ids) = {
             let queries = self.queries.read().unwrap();
             let Some(query_state) = queries.get(&query_id) else {
                 return;
             };
 
-            // Get all pipeline IDs belonging to this query
-            let pipeline_ids: Vec<PipelineId> = query_state.graph.get_all_pipeline_ids();
+            // Get pipeline count belonging to this query
+            let pipeline_count = query_state.graph.len();
 
             // Collect errors
             let errors = query_state.error_state.get_errors();
 
             // Get source pipeline IDs (need special handling to stop threads)
-            let source_ids: Vec<PipelineId> = pipeline_ids
+            let all_ids = query_state.graph.get_all_pipeline_ids();
+            let source_ids: Vec<PipelineId> = all_ids
                 .iter()
                 .filter(|pid| query_state.graph.is_source(pid))
                 .cloned()
                 .collect();
 
-            (pipeline_ids, errors, source_ids)
-        };
-
-        // Signal all source stop flags FIRST so worker threads see should_stop() == true.
-        // This must happen before teardown which joins the thread.
-        {
-            let metadata = self.metadata.lock().unwrap();
+            // Signal all source stop flags FIRST so worker threads see should_stop() == true.
+            // This must happen before teardown which joins the thread.
             for source_id in &source_ids {
-                if let Some(meta) = metadata.get(source_id) {
-                    meta.request_source_stop();
+                if let Some(node) = query_state.graph.get_node(source_id) {
+                    node.metadata().request_source_stop();
                 }
             }
-        }
+
+            (pipeline_count, errors, source_ids)
+        };
 
         // Stop all source threads BEFORE removing query state.
         // This is critical because source threads hold Arc clones of the C++
@@ -1738,17 +1739,10 @@ impl ExecutorShared {
             }
         }
 
-        // Remove pipeline metadata for all pipelines in this query
-        {
-            let mut metadata = self.metadata.lock().unwrap();
-            for pid in &pipeline_ids_to_remove {
-                if metadata.remove(pid).is_some() {
-                    stats.pipelines_stopped += 1;
-                }
-            }
-        }
+        stats.pipelines_stopped += pipeline_count;
 
         // Remove query state (Drop cascade calls stage_destroy, NOT stop)
+        // This also drops all Arc<PipelineNode>s, invalidating all Weak refs.
         let removed_query = {
             let mut queries = self.queries.write().unwrap();
             queries.remove(&query_id)
@@ -1769,8 +1763,7 @@ impl ExecutorShared {
         // If engine is shutting down and all queries are done, push Shutdown
         if self.shutting_down.load(Ordering::SeqCst) {
             let queries_empty = self.queries.read().unwrap().is_empty();
-            let metadata_empty = self.metadata.lock().unwrap().is_empty();
-            if queries_empty && metadata_empty {
+            if queries_empty {
                 self.task_queue.lock().unwrap().push(Task::Shutdown);
                 self.task_available.notify_all();
             }
@@ -1782,51 +1775,28 @@ impl ExecutorShared {
     /// Used only when Shutdown task is received (e.g., emergency stop or empty graph).
     /// Normal graceful shutdown uses cascading StopPipelineTasks.
     fn stop_all_pipelines(&self, stats: &mut ExecutionStats) {
-        // Get list of all active pipelines
-        let pipeline_ids: Vec<PipelineId> = {
-            let metadata = self.metadata.lock().unwrap();
-            metadata.keys().cloned().collect()
-        };
-
-        // Call teardown on each pipeline - search all query graphs
+        // Call teardown on each pipeline in all query graphs
         let queries_guard = self.queries.read().unwrap();
-        for pipeline_id in &pipeline_ids {
-            // Find the graph containing this pipeline
-            let mut found_pipeline = None;
-            for query_state in queries_guard.values() {
-                if let Some(pipeline) = query_state.graph.get_pipeline(pipeline_id) {
-                    found_pipeline = Some(pipeline);
-                    break;
-                }
-            }
+        for query_state in queries_guard.values() {
+            let pipeline_ids = query_state.graph.get_all_pipeline_ids();
+            for pipeline_id in &pipeline_ids {
+                if let Some(node) = query_state.graph.get_node(pipeline_id) {
+                    // Check if setup succeeded before calling teardown
+                    if node.metadata().is_setup_succeeded() {
+                        // Create context for teardown
+                        let (emit_tx, _emit_rx) = channel();
+                        let context =
+                            context::ExecutorContext::new(pipeline_id.clone(), 0, 1, emit_tx);
 
-            if let Some(pipeline) = found_pipeline {
-                // Check if setup succeeded before calling teardown
-                let should_teardown = {
-                    let metadata = self.metadata.lock().unwrap();
-                    metadata
-                        .get(pipeline_id)
-                        .map(|meta| meta.is_setup_succeeded())
-                        .unwrap_or(false)
-                };
-
-                if should_teardown {
-                    // Create context for teardown
-                    let (emit_tx, _emit_rx) = channel();
-                    let context = context::ExecutorContext::new(pipeline_id.clone(), 0, 1, emit_tx);
-
-                    if let Err(e) = pipeline.teardown(&context) {
-                        eprintln!("Error during pipeline teardown for {}: {}", pipeline_id, e);
-                        stats.errors_encountered += 1;
+                        if let Err(e) = node.pipeline().teardown(&context) {
+                            eprintln!("Error during pipeline teardown for {}: {}", pipeline_id, e);
+                            stats.errors_encountered += 1;
+                        }
                     }
                 }
+                stats.pipelines_stopped += 1;
             }
         }
-
-        // Remove all metadata
-        let mut metadata = self.metadata.lock().unwrap();
-        stats.pipelines_stopped += pipeline_ids.len();
-        metadata.clear();
     }
 
     /// Run the worker loop for a single worker thread.
@@ -1874,16 +1844,23 @@ impl ExecutorShared {
             Task::WorkTask {
                 query_id,
                 pipeline_id,
+                node: node_weak,
                 buffer,
             } => {
+                // Try to upgrade the Weak pointer - if it fails, the pipeline was removed
+                let Some(node) = node_weak.upgrade() else {
+                    stats.tasks_skipped += 1;
+                    return;
+                };
+
                 // Filter-on-dequeue: skip tasks for stopped/removed/stopping queries
                 // query_id 0 is backward compatibility - always process
                 if query_id != 0 && !self.query_accepts_work(query_id) {
                     stats.tasks_skipped += 1;
-                    self.decrement_ref_and_check_stop(&pipeline_id, stats);
+                    self.decrement_ref_and_check_stop(&node, &pipeline_id, stats);
                     return;
                 }
-                self.execute_work_task(worker_id, query_id, &pipeline_id, buffer, stats);
+                self.execute_work_task(worker_id, query_id, &pipeline_id, node, buffer, stats);
                 stats.tasks_executed += 1;
             }
             Task::DeployGraph { graph, query_id } => {
@@ -2067,7 +2044,6 @@ impl Executor {
         let shared = Arc::new(ExecutorShared {
             queries: Arc::new(RwLock::new(HashMap::new())),
             task_queue,
-            metadata: Arc::new(Mutex::new(HashMap::new())),
             delayed_submitter_handle: Some(delayed_submitter.get_handle()),
             stats_sender,
             next_task_id: AtomicU64::new(1),
@@ -2101,7 +2077,6 @@ impl Executor {
     pub fn get_handle(&self) -> ExecutorHandle {
         ExecutorHandle {
             task_queue: Arc::clone(&self.shared.task_queue),
-            metadata: Arc::clone(&self.shared.metadata),
             queries: Arc::clone(&self.shared.queries),
             shutting_down: Arc::clone(&self.shared.shutting_down),
             task_available: Arc::clone(&self.shared.task_available),
@@ -2229,19 +2204,25 @@ impl Executor {
             Task::WorkTask {
                 query_id,
                 pipeline_id,
+                node: node_weak,
                 buffer,
             } => {
+                // Try to upgrade the Weak pointer - if it fails, the pipeline was removed
+                let Some(node) = node_weak.upgrade() else {
+                    return true; // Task was "executed" (skipped - pipeline gone)
+                };
+
                 // Filter-on-dequeue: skip tasks for stopped/removed/stopping queries
                 // query_id 0 is backward compatibility - always process
                 if query_id != 0 && !self.shared.query_accepts_work(query_id) {
                     // Must decrement pending counter even for skipped tasks
                     // (see run() loop for detailed explanation).
                     self.shared
-                        .decrement_ref_and_check_stop(&pipeline_id, &mut stats);
+                        .decrement_ref_and_check_stop(&node, &pipeline_id, &mut stats);
                     return true; // Task was "executed" (skipped)
                 }
                 self.shared
-                    .execute_work_task(0, query_id, &pipeline_id, buffer, &mut stats);
+                    .execute_work_task(0, query_id, &pipeline_id, node, buffer, &mut stats);
             }
             Task::DeployGraph { graph, query_id } => {
                 self.shared
