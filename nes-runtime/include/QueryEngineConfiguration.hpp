@@ -28,14 +28,16 @@ class QueryEngineConfiguration final : public BaseConfiguration
 {
 public:
     QueryEngineConfiguration() = default;
+
     QueryEngineConfiguration(const std::string& name, const std::string& description) : BaseConfiguration(name, description) { }
 
     /// Number of worker threads for query execution.
     /// Default is 4 threads.
-    UIntOption numWorkerThreads = {"num_worker_threads", "4", "Number of worker threads for query execution", {std::make_shared<NumberValidation>()}};
+    UIntOption numWorkerThreads
+        = {"num_worker_threads", "4", "Number of worker threads for query execution", {std::make_shared<NumberValidation>()}};
 
 private:
     std::vector<BaseOption*> getOptions() override { return {&numWorkerThreads}; }
 };
 
-}  // namespace NES
+} /// namespace NES

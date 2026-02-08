@@ -17,10 +17,10 @@
 #include <ostream>
 #include <utility>
 #include <vector>
+#include <Execution/NesPipelineStage.hpp>
+#include <Execution/NesQueryPlan.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Util/Logger/Formatter.hpp>
-#include <Execution/NesQueryPlan.hpp>
-#include <Execution/NesPipelineStage.hpp>
 #include <CompiledQueryPlan.hpp>
 #include <NesSourceHandle.hpp>
 
@@ -38,8 +38,7 @@ struct ExecutableQueryPlan
     /// @param compiledQueryPlan The compiled query plan with stages and edges
     /// @param sourceProvider Provider for creating source instances
     /// @return ExecutableQueryPlan ready for execution
-    static std::unique_ptr<ExecutableQueryPlan>
-    instantiate(CompiledQueryPlan& compiledQueryPlan, const SourceProvider& sourceProvider);
+    static std::unique_ptr<ExecutableQueryPlan> instantiate(CompiledQueryPlan& compiledQueryPlan, const SourceProvider& sourceProvider);
 
     ExecutableQueryPlan(
         LocalQueryId localQueryId,
@@ -49,10 +48,7 @@ struct ExecutableQueryPlan
         std::vector<std::pair<uint64_t, uint64_t>> source_to_stage);
 
     /// Get the pipeline stages (owned by this plan).
-    [[nodiscard]] const std::vector<std::unique_ptr<NesPipelineStage>>& getStages() const
-    {
-        return stages_;
-    }
+    [[nodiscard]] const std::vector<std::unique_ptr<NesPipelineStage>>& getStages() const { return stages_; }
 
     /// Move stages out of this plan (transfers ownership).
     std::vector<std::unique_ptr<NesPipelineStage>> takeStages() { return std::move(stages_); }
@@ -78,6 +74,6 @@ private:
     /// Source-to-stage mappings: (source_index, stage_index)
     std::vector<std::pair<uint64_t, uint64_t>> source_to_stage_;
 };
-}  // namespace NES
+} /// namespace NES
 
 FMT_OSTREAM(NES::ExecutableQueryPlan);

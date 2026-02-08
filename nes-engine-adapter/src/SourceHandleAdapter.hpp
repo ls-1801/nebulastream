@@ -17,8 +17,8 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <adaptive_engine/SourceHandle.hpp>
 #include <Execution/NesSourceAdapter.hpp>
+#include <adaptive_engine/SourceHandle.hpp>
 #include "AdaptiveStageContext.hpp"
 #include "NesBufferProvider.hpp"
 
@@ -30,10 +30,7 @@ namespace NES
 class SourceHandleAdapter final : public adaptive_engine::SourceHandle
 {
 public:
-    explicit SourceHandleAdapter(std::unique_ptr<NesSourceAdapter> source)
-        : source_(std::move(source))
-    {
-    }
+    explicit SourceHandleAdapter(std::unique_ptr<NesSourceAdapter> source) : source_(std::move(source)) { }
 
     std::optional<adaptive_engine::BufferHandle> next_buffer(adaptive_engine::ExecutionContext& ctx) override
     {
@@ -59,18 +56,12 @@ public:
         source_->close(nesCtx);
     }
 
-    [[nodiscard]] std::string get_id() const override
-    {
-        return source_->getId();
-    }
+    [[nodiscard]] std::string get_id() const override { return source_->getId(); }
 
-    void request_stop() override
-    {
-        source_->requestStop();
-    }
+    void request_stop() override { source_->requestStop(); }
 
 private:
     std::unique_ptr<NesSourceAdapter> source_;
 };
 
-}  // namespace NES
+} /// namespace NES

@@ -30,7 +30,7 @@ namespace
 {
 /// Event type values from FfiStatisticsEventType (Rust enum).
 constexpr uint32_t FFI_EVENT_QUERY_TERMINATED = 9;
-}  // namespace
+} /// namespace
 
 class NesQueryEngine::Impl
 {
@@ -38,8 +38,7 @@ public:
     explicit Impl(std::shared_ptr<AbstractBufferProvider> bufferProvider)
         : bufferProvider_(std::make_unique<NesBufferProvider>(std::move(bufferProvider)))
     {
-        engine_ = adaptive_engine::Engine::create_with_stats(
-            static_cast<void*>(bufferProvider_.get()), statsQueue_);
+        engine_ = adaptive_engine::Engine::create_with_stats(static_cast<void*>(bufferProvider_.get()), statsQueue_);
     }
 
     ~Impl()
@@ -62,30 +61,30 @@ public:
         if (statsQueue_)
         {
             stopPolling_.store(false);
-            pollingThread_ = std::thread([this]()
-            {
-                while (!stopPolling_.load())
+            pollingThread_ = std::thread(
+                [this]()
                 {
-                    uint32_t eventType = 0;
-                    uint64_t workerId = 0;
-                    uint64_t queryId = 0;
-                    std::string pipelineId;
-                    std::string toPipelineId;
-                    uint64_t taskId = 0;
-
-                    bool got = statsQueue_->poll(50, eventType, workerId, queryId,
-                                                 pipelineId, toPipelineId, taskId);
-                    if (!got)
+                    while (!stopPolling_.load())
                     {
-                        continue;
-                    }
+                        uint32_t eventType = 0;
+                        uint64_t workerId = 0;
+                        uint64_t queryId = 0;
+                        std::string pipelineId;
+                        std::string toPipelineId;
+                        uint64_t taskId = 0;
 
-                    if (eventType == FFI_EVENT_QUERY_TERMINATED && callback_)
-                    {
-                        callback_(queryId);
+                        bool got = statsQueue_->poll(50, eventType, workerId, queryId, pipelineId, toPipelineId, taskId);
+                        if (!got)
+                        {
+                            continue;
+                        }
+
+                        if (eventType == FFI_EVENT_QUERY_TERMINATED && callback_)
+                        {
+                            callback_(queryId);
+                        }
                     }
-                }
-            });
+                });
         }
     }
 
@@ -102,16 +101,13 @@ public:
         }
     }
 
-    void setQueryTerminatedCallback(QueryTerminatedCallback callback)
-    {
-        callback_ = std::move(callback);
-    }
+    void setQueryTerminatedCallback(QueryTerminatedCallback callback) { callback_ = std::move(callback); }
 
     QueryId submitQuery(NesQueryPlan&& plan)
     {
         adaptive_engine::QueryPlan enginePlan;
 
-        // Wrap each NesPipelineStage in a PipelineStageAdapter
+        /// Wrap each NesPipelineStage in a PipelineStageAdapter
         std::vector<std::unique_ptr<adaptive_engine::PipelineStage>> ownedStages;
         ownedStages.reserve(plan.stages.size());
         for (auto& stage : plan.stages)
@@ -125,16 +121,14 @@ public:
             enginePlan.stages.push_back(stage.get());
         }
 
-        // Convert NesEdge -> adaptive_engine::Edge
+        /// Convert NesEdge -> adaptive_engine::Edge
         enginePlan.edges.reserve(plan.edges.size());
         for (const auto& edge : plan.edges)
         {
-            enginePlan.edges.push_back(adaptive_engine::Edge{
-                .source_stage = edge.sourceStage,
-                .target_stage = edge.targetStage});
+            enginePlan.edges.push_back(adaptive_engine::Edge{.source_stage = edge.sourceStage, .target_stage = edge.targetStage});
         }
 
-        // Wrap each NesSourceAdapter in a SourceHandleAdapter
+        /// Wrap each NesSourceAdapter in a SourceHandleAdapter
         std::vector<std::unique_ptr<adaptive_engine::SourceHandle>> ownedSources;
         ownedSources.reserve(plan.sources.size());
         for (auto& source : plan.sources)
@@ -148,23 +142,26 @@ public:
             enginePlan.sources.push_back(source.get());
         }
 
-        // Copy source-to-stage mappings
+        /// Copy source-to-stage mappings
         enginePlan.source_to_stage = plan.sourceToStage;
 
-        // Submit to the engine
+        /// Submit to the engine
         auto queryId = engine_->submit_query(enginePlan, nullptr);
 
-        // Release ownership to the Rust engine (it destroys via stage_destroy/source_destroy)
-        for (auto& stage : ownedStages) { stage.release(); }
-        for (auto& source : ownedSources) { source.release(); }
+        /// Release ownership to the Rust engine (it destroys via stage_destroy/source_destroy)
+        for (auto& stage : ownedStages)
+        {
+            stage.release();
+        }
+        for (auto& source : ownedSources)
+        {
+            source.release();
+        }
 
         return queryId;
     }
 
-    bool stopQuery(QueryId id)
-    {
-        return engine_->stop_query(id);
-    }
+    bool stopQuery(QueryId id) { return engine_->stop_query(id); }
 
 private:
     std::unique_ptr<NesBufferProvider> bufferProvider_;
@@ -179,8 +176,7 @@ NesQueryEngine::NesQueryEngine() = default;
 
 NesQueryEngine::~NesQueryEngine() = default;
 
-std::unique_ptr<NesQueryEngine> NesQueryEngine::create(
-    std::shared_ptr<AbstractBufferProvider> bufferProvider)
+std::unique_ptr<NesQueryEngine> NesQueryEngine::create(std::shared_ptr<AbstractBufferProvider> bufferProvider)
 {
     auto engine = std::unique_ptr<NesQueryEngine>(new NesQueryEngine());
     engine->impl_ = std::make_unique<Impl>(std::move(bufferProvider));
@@ -212,4 +208,4 @@ bool NesQueryEngine::stopQuery(QueryId id)
     return impl_->stopQuery(id);
 }
 
-}  // namespace NES
+} /// namespace NES

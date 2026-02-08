@@ -156,17 +156,14 @@ public:
         const testing::ScopedTrace scopedTrace(location.file_name(), static_cast<int>(location.line()), "checkBufferAt");
         ASSERT_GE(buffers.rlock()->size(), index) << fmt::format("Index out of bound when checking buffer at {}", index);
         EXPECT_EQ(buffers.rlock()->at(index).getNumberOfTuples(), numberOfTuples) << fmt::format("Expected {} tuples", numberOfTuples);
-        EXPECT_EQ(buffers.rlock()->at(index).getSequenceRange(), expectedRange)
-            << fmt::format("Expected SequenceRange {}", expectedRange);
+        EXPECT_EQ(buffers.rlock()->at(index).getSequenceRange(), expectedRange) << fmt::format("Expected SequenceRange {}", expectedRange);
         EXPECT_EQ(buffers.rlock()->at(index).getOriginId(), OriginId(originId)) << fmt::format("Expected OriginId {}", originId);
     }
 
     void checkForDups(std::source_location location = std::source_location::current())
     {
         const testing::ScopedTrace scopedTrace(location.file_name(), static_cast<int>(location.line()), "checkForDups");
-        auto uniqueRanges = (*buffers.rlock())
-            | std::views::transform([](const auto& buffer)
-                                    { return buffer.getSequenceRange(); })
+        auto uniqueRanges = (*buffers.rlock()) | std::views::transform([](const auto& buffer) { return buffer.getSequenceRange(); })
             | std::ranges::to<std::set>();
 
         EXPECT_EQ(buffers.rlock()->size(), uniqueRanges.size()) << "Received duplicate sequence ranges";
@@ -204,10 +201,7 @@ public:
         }
     }
 
-    TupleBuffer createBuffer(
-        SequenceRange range,
-        OriginId originId = INITIAL<OriginId>,
-        size_t numberOfTuples = 0)
+    TupleBuffer createBuffer(SequenceRange range, OriginId originId = INITIAL<OriginId>, size_t numberOfTuples = 0)
     {
         auto buffer = bm->getBufferBlocking();
         buffer.setNumberOfTuples(numberOfTuples);
@@ -276,12 +270,10 @@ TEST_F(EmitPhysicalOperatorTest, ChunkNumberTest)
         checkForDups();
         checkRangesComplete();
 
-        hasMorePermutations = std::ranges::next_permutation(
-                                  inputBuffers,
-                                  std::less{},
-                                  [](const TupleBuffer& buffer)
-                                  { return SequenceData(buffer.getSequenceRange()); })
-                                  .found;
+        hasMorePermutations
+            = std::ranges::next_permutation(
+                  inputBuffers, std::less{}, [](const TupleBuffer& buffer) { return SequenceData(buffer.getSequenceRange()); })
+                  .found;
     }
 }
 
@@ -322,12 +314,10 @@ TEST_F(EmitPhysicalOperatorTest, SequenceChunkNumberTest)
         checkNumberOfBuffers(8);
         checkForDups();
         checkRangesComplete();
-        hasMorePermutations = std::ranges::next_permutation(
-                                  inputBuffers,
-                                  std::less{},
-                                  [](const TupleBuffer& buffer)
-                                  { return SequenceData(buffer.getSequenceRange()); })
-                                  .found;
+        hasMorePermutations
+            = std::ranges::next_permutation(
+                  inputBuffers, std::less{}, [](const TupleBuffer& buffer) { return SequenceData(buffer.getSequenceRange()); })
+                  .found;
     };
 }
 

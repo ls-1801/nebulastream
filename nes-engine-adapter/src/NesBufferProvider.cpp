@@ -23,8 +23,7 @@ NesBufferWrapper::NesBufferWrapper(TupleBuffer buf) : buffer(std::move(buf))
 {
 }
 
-NesBufferProvider::NesBufferProvider(std::shared_ptr<AbstractBufferProvider> nesProvider)
-    : nesProvider_(std::move(nesProvider))
+NesBufferProvider::NesBufferProvider(std::shared_ptr<AbstractBufferProvider> nesProvider) : nesProvider_(std::move(nesProvider))
 {
     PRECONDITION(nesProvider_ != nullptr, "NesBufferProvider requires a valid AbstractBufferProvider");
 }
@@ -52,27 +51,27 @@ adaptive_engine::BufferHandle NesBufferProvider::allocate(size_t size)
 
     std::optional<TupleBuffer> buffer;
 
-    // If requested size fits in pooled buffer, use pooled allocation
+    /// If requested size fits in pooled buffer, use pooled allocation
     if (size <= nesProvider_->getBufferSize())
     {
         buffer = nesProvider_->getBufferNoBlocking();
     }
     else
     {
-        // Otherwise use unpooled buffer of exact size
+        /// Otherwise use unpooled buffer of exact size
         buffer = nesProvider_->getUnpooledBuffer(size);
     }
 
     if (!buffer.has_value())
     {
-        // Allocation failed - return null handle
+        /// Allocation failed - return null handle
         return adaptive_engine::BufferHandle{nullptr};
     }
 
-    // Create wrapper holding the new buffer
+    /// Create wrapper holding the new buffer
     auto* wrapper = new NesBufferWrapper(std::move(buffer.value()));
 
     return adaptive_engine::BufferHandle{wrapper};
 }
 
-}  // namespace NES
+} /// namespace NES

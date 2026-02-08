@@ -18,13 +18,13 @@
 #include <memory>
 #include <utility>
 #include <vector>
-#include <ExecutableQueryPlan.hpp>
 #include <Listeners/QueryLog.hpp>
 #include <Listeners/StatisticListener.hpp>
-#include <QueryEngineStatisticListener.hpp>
 #include <Runtime/BufferManager.hpp>
 #include <Runtime/Execution/QueryStatus.hpp>
 #include <Util/Logger/Logger.hpp>
+#include <ExecutableQueryPlan.hpp>
+#include <QueryEngineStatisticListener.hpp>
 
 namespace NES
 {
@@ -44,9 +44,7 @@ QueryEngine::QueryEngine(
     NES_INFO("Creating QueryEngine with {} worker threads", config_.numWorkerThreads.getValue());
 
     engine_ = NesQueryEngine::create(bufferManager);
-    engine_->setQueryTerminatedCallback([this](NesQueryEngine::QueryId engineQueryId) {
-        handleQueryTerminated(engineQueryId);
-    });
+    engine_->setQueryTerminatedCallback([this](NesQueryEngine::QueryId engineQueryId) { handleQueryTerminated(engineQueryId); });
     engine_->start();
 
     NES_INFO("QueryEngine started successfully");
@@ -70,39 +68,38 @@ void QueryEngine::start(LocalQueryId queryId, std::unique_ptr<ExecutableQueryPla
 {
     NES_INFO("Starting query {}", queryId);
 
-    // Build a NesQueryPlan from the ExecutableQueryPlan
+    /// Build a NesQueryPlan from the ExecutableQueryPlan
     NesQueryPlan queryPlan;
 
-    // Move stages from the plan
+    /// Move stages from the plan
     queryPlan.stages = plan->takeStages();
 
-    // Copy edges
+    /// Copy edges
     queryPlan.edges = plan->getEdges();
 
-    // Move sources (NesSourceHandle IS-A NesSourceAdapter)
+    /// Move sources (NesSourceHandle IS-A NesSourceAdapter)
     queryPlan.sources.reserve(plan->sources.size());
     for (auto& source : plan->sources)
     {
         queryPlan.sources.push_back(std::move(source));
     }
 
-    // Copy source-to-stage mappings
+    /// Copy source-to-stage mappings
     queryPlan.sourceToStage = plan->getSourceToStage();
 
-    // Submit the query to the engine
+    /// Submit the query to the engine
     NesQueryEngine::QueryId engineQueryId = engine_->submitQuery(std::move(queryPlan));
 
-    // Store the mapping and the plan
-    runningQueries_.wlock()->emplace(
-        queryId, RunningQuery{.engineQueryId = engineQueryId, .nesQueryId = queryId, .plan = std::move(plan)});
+    /// Store the mapping and the plan
+    runningQueries_.wlock()->emplace(queryId, RunningQuery{.engineQueryId = engineQueryId, .nesQueryId = queryId, .plan = std::move(plan)});
 
-    // Log the query start
+    /// Log the query start
     if (queryLog_)
     {
         queryLog_->logQueryStatusChange(queryId, QueryState::Running, std::chrono::system_clock::now());
     }
 
-    // Emit statistics event
+    /// Emit statistics event
     if (statisticsListener_)
     {
         static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())->onEvent(QueryStart(workerThreadId_, queryId));
@@ -115,13 +112,13 @@ void QueryEngine::stop(LocalQueryId queryId)
 {
     NES_INFO("Stopping query {}", queryId);
 
-    // Emit stop request event
+    /// Emit stop request event
     if (statisticsListener_)
     {
         static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())->onEvent(QueryStopRequest(workerThreadId_, queryId));
     }
 
-    // Find and remove the query from the running map
+    /// Find and remove the query from the running map
     std::optional<RunningQuery> query;
     {
         auto locked = runningQueries_.wlock();
@@ -139,7 +136,7 @@ void QueryEngine::stop(LocalQueryId queryId)
         return;
     }
 
-    // Stop the query in the engine
+    /// Stop the query in the engine
     bool stopped = engine_->stopQuery(query->engineQueryId);
 
     if (stopped)
@@ -151,13 +148,13 @@ void QueryEngine::stop(LocalQueryId queryId)
         NES_WARNING("Query {} may not have been fully stopped", queryId);
     }
 
-    // Log the query stop
+    /// Log the query stop
     if (queryLog_)
     {
         queryLog_->logQueryStatusChange(queryId, QueryState::Stopped, std::chrono::system_clock::now());
     }
 
-    // Emit statistics event
+    /// Emit statistics event
     if (statisticsListener_)
     {
         static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())->onEvent(QueryStop(workerThreadId_, queryId));
@@ -166,7 +163,7 @@ void QueryEngine::stop(LocalQueryId queryId)
 
 void QueryEngine::handleQueryTerminated(NesQueryEngine::QueryId engineQueryId)
 {
-    // Find the NES query ID corresponding to this engine query ID
+    /// Find the NES query ID corresponding to this engine query ID
     std::optional<LocalQueryId> nesQueryId;
     {
         auto locked = runningQueries_.wlock();
@@ -189,17 +186,17 @@ void QueryEngine::handleQueryTerminated(NesQueryEngine::QueryId engineQueryId)
 
     NES_INFO("Query {} terminated naturally (engine query {})", *nesQueryId, engineQueryId);
 
-    // Log the query stop in the QueryLog (this is what the systest polls)
+    /// Log the query stop in the QueryLog (this is what the systest polls)
     if (queryLog_)
     {
         queryLog_->logQueryStatusChange(*nesQueryId, QueryState::Stopped, std::chrono::system_clock::now());
     }
 
-    // Emit NES statistics events
+    /// Emit NES statistics events
     if (statisticsListener_)
     {
         static_cast<QueryEngineStatisticListener*>(statisticsListener_.get())->onEvent(QueryStop(workerThreadId_, *nesQueryId));
     }
 }
 
-}  // namespace NES
+} /// namespace NES

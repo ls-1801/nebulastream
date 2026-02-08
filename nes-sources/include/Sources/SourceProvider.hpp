@@ -20,8 +20,8 @@
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <Sources/SourceDescriptor.hpp>
 #include <Sources/SourceHandle.hpp>
-#include <NesSourceHandle.hpp>
 #include <BackpressureChannel.hpp>
+#include <NesSourceHandle.hpp>
 
 namespace NES
 {
@@ -45,8 +45,7 @@ public:
     /// Create a NesSourceHandle for the adaptive engine's pull-based source model.
     /// Unlike lower(), this creates a pull-based source handle that the adaptive engine
     /// will drive via its own source threads (open/next_buffer/close lifecycle).
-    [[nodiscard]] std::unique_ptr<NesSourceHandle>
-    lowerAdaptive(OriginId originId, const SourceDescriptor& sourceDescriptor) const;
+    [[nodiscard]] std::unique_ptr<NesSourceHandle> lowerAdaptive(OriginId originId, const SourceDescriptor& sourceDescriptor) const;
 
     [[nodiscard]] bool contains(const std::string& sourceType) const;
 };

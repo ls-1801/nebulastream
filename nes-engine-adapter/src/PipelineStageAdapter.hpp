@@ -17,8 +17,8 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <adaptive_engine/PipelineStage.hpp>
 #include <Execution/NesPipelineStage.hpp>
+#include <adaptive_engine/PipelineStage.hpp>
 #include "AdaptiveStageContext.hpp"
 #include "NesBufferProvider.hpp"
 
@@ -30,10 +30,7 @@ namespace NES
 class PipelineStageAdapter final : public adaptive_engine::PipelineStage
 {
 public:
-    explicit PipelineStageAdapter(std::unique_ptr<NesPipelineStage> stage)
-        : stage_(std::move(stage))
-    {
-    }
+    explicit PipelineStageAdapter(std::unique_ptr<NesPipelineStage> stage) : stage_(std::move(stage)) { }
 
     void start(adaptive_engine::ExecutionContext& ctx) override
     {
@@ -49,7 +46,7 @@ public:
         }
 
         auto* wrapper = static_cast<NesBufferWrapper*>(input.opaque);
-        TupleBuffer buffer = wrapper->buffer;  // copies TupleBuffer (increments ref count)
+        TupleBuffer buffer = wrapper->buffer; /// copies TupleBuffer (increments ref count)
 
         AdaptiveStageContext nesCtx(ctx);
         stage_->doExecute(nesCtx, buffer);
@@ -61,13 +58,10 @@ public:
         stage_->stop(nesCtx);
     }
 
-    [[nodiscard]] std::string get_id() const override
-    {
-        return stage_->getId();
-    }
+    [[nodiscard]] std::string get_id() const override { return stage_->getId(); }
 
 private:
     std::unique_ptr<NesPipelineStage> stage_;
 };
 
-}  // namespace NES
+} /// namespace NES

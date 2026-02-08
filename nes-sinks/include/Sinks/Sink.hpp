@@ -16,8 +16,8 @@
 
 #include <ostream>
 #include <string>
-#include <fmt/ostream.h>
 #include <Execution/NesPipelineStage.hpp>
+#include <fmt/ostream.h>
 #include <BackpressureChannel.hpp>
 
 namespace NES

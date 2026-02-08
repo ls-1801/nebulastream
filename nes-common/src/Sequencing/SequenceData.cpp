@@ -19,7 +19,9 @@
 namespace NES
 {
 
-SequenceData::SequenceData(SequenceRange range) : range(std::move(range)) { }
+SequenceData::SequenceData(SequenceRange range) : range(std::move(range))
+{
+}
 
 SequenceData::SequenceData() = default;
 

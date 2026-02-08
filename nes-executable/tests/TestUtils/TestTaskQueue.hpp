@@ -47,6 +47,7 @@ public:
     virtual void start(NES::PipelineExecutionContext& pipelineExecutionContext) = 0;
     virtual void execute(const NES::TupleBuffer& inputTupleBuffer, NES::PipelineExecutionContext& pipelineExecutionContext) = 0;
     virtual void stop(NES::PipelineExecutionContext& pipelineExecutionContext) = 0;
+
     virtual std::ostream& toString(std::ostream& os) const { return os << "TestExecutablePipelineStage"; }
 };
 
@@ -178,16 +179,16 @@ struct TestPipelineTask
     /// Wraps the stage in a TestExecutablePipelineStage adapter.
     template <typename T>
     TestPipelineTask(const WorkerThreadId workerThreadId, TupleBuffer tupleBuffer, std::shared_ptr<T> stage)
-        : workerThreadId(workerThreadId), tupleBuffer(std::move(tupleBuffer)),
-          eps(std::make_shared<StageAdapter<T>>(std::move(stage)))
+        : workerThreadId(workerThreadId), tupleBuffer(std::move(tupleBuffer)), eps(std::make_shared<StageAdapter<T>>(std::move(stage)))
     {
     }
 
     /// 2-arg template constructor (no explicit WorkerThreadId)
     template <typename T>
     TestPipelineTask(TupleBuffer tupleBuffer, std::shared_ptr<T> stage)
-        : workerThreadId(INVALID<WorkerThreadId>), tupleBuffer(std::move(tupleBuffer)),
-          eps(std::make_shared<StageAdapter<T>>(std::move(stage)))
+        : workerThreadId(INVALID<WorkerThreadId>)
+        , tupleBuffer(std::move(tupleBuffer))
+        , eps(std::make_shared<StageAdapter<T>>(std::move(stage)))
     {
     }
 
@@ -204,9 +205,13 @@ private:
     struct StageAdapter final : TestExecutablePipelineStage
     {
         explicit StageAdapter(std::shared_ptr<T> s) : stage(std::move(s)) { }
+
         void start(PipelineExecutionContext& ctx) override { stage->start(ctx); }
+
         void execute(const TupleBuffer& buf, PipelineExecutionContext& ctx) override { stage->execute(buf, ctx); }
+
         void stop(PipelineExecutionContext& ctx) override { stage->stop(ctx); }
+
         std::shared_ptr<T> stage;
     };
 };

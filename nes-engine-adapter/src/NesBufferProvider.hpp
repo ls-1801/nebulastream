@@ -15,8 +15,8 @@
 #pragma once
 
 #include <memory>
-#include <adaptive_engine/Buffer.hpp>
 #include <Runtime/TupleBuffer.hpp>
+#include <adaptive_engine/Buffer.hpp>
 
 namespace NES
 {
@@ -33,7 +33,8 @@ struct NesBufferWrapper : adaptive_engine::BufferHandleBase
     explicit NesBufferWrapper(TupleBuffer buf);
 
     adaptive_engine::BufferHandleBase* do_clone() override { return new NesBufferWrapper(buffer); }
-    // do_release() default (delete this) is correct
+
+    /// do_release() default (delete this) is correct
 };
 
 /// NES buffer management utility for allocating and wrapping buffers.
@@ -73,4 +74,4 @@ private:
     std::shared_ptr<AbstractBufferProvider> nesProvider_;
 };
 
-}  // namespace NES
+} /// namespace NES

@@ -245,10 +245,7 @@ public:
         std::vector<TupleBuffer> resultBufferVec(combinedThreadResults.begin(), combinedThreadResults.end());
         std::ranges::sort(
             resultBufferVec,
-            [](const TupleBuffer& left, const TupleBuffer& right)
-            {
-                return left.getSequenceRange() < right.getSequenceRange();
-            });
+            [](const TupleBuffer& left, const TupleBuffer& right) { return left.getSequenceRange() < right.getSequenceRange(); });
 
 
         /// Load expected results and compare to actual results

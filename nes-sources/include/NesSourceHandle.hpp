@@ -43,14 +43,11 @@ public:
     /// @param source The underlying NES Source implementation to wrap
     /// @param originId Unique identifier for this source
     /// @param bufferProvider Buffer provider for allocating buffers
-    NesSourceHandle(
-        std::unique_ptr<Source> source,
-        OriginId originId,
-        std::shared_ptr<AbstractBufferProvider> bufferProvider);
+    NesSourceHandle(std::unique_ptr<Source> source, OriginId originId, std::shared_ptr<AbstractBufferProvider> bufferProvider);
 
     ~NesSourceHandle() override = default;
 
-    // Non-copyable, non-movable
+    /// Non-copyable, non-movable
     NesSourceHandle(const NesSourceHandle&) = delete;
     NesSourceHandle& operator=(const NesSourceHandle&) = delete;
     NesSourceHandle(NesSourceHandle&&) = delete;
@@ -86,4 +83,4 @@ private:
     bool opened_{false};
 };
 
-}  // namespace NES
+} /// namespace NES

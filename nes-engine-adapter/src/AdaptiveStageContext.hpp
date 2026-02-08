@@ -15,8 +15,8 @@
 #pragma once
 
 #include <memory>
-#include <adaptive_engine/ExecutionContext.hpp>
 #include <Execution/NesStageContext.hpp>
+#include <adaptive_engine/ExecutionContext.hpp>
 #include "NesBufferProvider.hpp"
 
 namespace NES
@@ -28,8 +28,7 @@ class AdaptiveStageContext final : public NesStageContext
 {
 public:
     explicit AdaptiveStageContext(adaptive_engine::ExecutionContext& ctx)
-        : ctx_(ctx)
-        , nesProvider_(static_cast<NesBufferProvider*>(ctx.get_user_data()))
+        : ctx_(ctx), nesProvider_(static_cast<NesBufferProvider*>(ctx.get_user_data()))
     {
     }
 
@@ -39,20 +38,11 @@ public:
         ctx_.emit_buffer(adaptive_engine::BufferHandle{wrapper});
     }
 
-    void repeatTask() override
-    {
-        ctx_.repeat_task(adaptive_engine::BufferHandle{nullptr});
-    }
+    void repeatTask() override { ctx_.repeat_task(adaptive_engine::BufferHandle{nullptr}); }
 
-    [[nodiscard]] uint32_t getWorkerId() const override
-    {
-        return ctx_.get_worker_id();
-    }
+    [[nodiscard]] uint32_t getWorkerId() const override { return ctx_.get_worker_id(); }
 
-    [[nodiscard]] uint64_t getPipelineId() const override
-    {
-        return ctx_.get_pipeline_id();
-    }
+    [[nodiscard]] uint64_t getPipelineId() const override { return ctx_.get_pipeline_id(); }
 
     TupleBuffer allocateBuffer() override
     {
@@ -77,4 +67,4 @@ private:
     NesBufferProvider* nesProvider_;
 };
 
-}  // namespace NES
+} /// namespace NES

@@ -35,7 +35,7 @@ public:
     virtual ~NesPipelineStage() = default;
 
     /// Called once when the pipeline starts. Default is no-op.
-    virtual void start(NesStageContext& /*ctx*/) {}
+    virtual void start(NesStageContext& /*ctx*/) { }
 
     /// Process a TupleBuffer. Implemented by concrete NES pipeline stages and sinks.
     /// @param ctx Execution context for this invocation
@@ -43,11 +43,11 @@ public:
     virtual void doExecute(NesStageContext& ctx, TupleBuffer& buffer) = 0;
 
     /// Called once when the pipeline stops. Default is no-op.
-    virtual void stop(NesStageContext& /*ctx*/) {}
+    virtual void stop(NesStageContext& /*ctx*/) { }
 
     /// Get the unique identifier for this stage.
     /// @return Stage identifier string
     [[nodiscard]] virtual std::string getId() const = 0;
 };
 
-}  // namespace NES
+} /// namespace NES

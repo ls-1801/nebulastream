@@ -39,11 +39,9 @@ std::unique_ptr<NodeEngine> NodeEngineBuilder::build(WorkerId /*workerId*/)
         workerConfiguration.numberOfBuffersInGlobalBufferManager.getValue());
     auto queryLog = std::make_shared<QueryLog>();
 
-    // Note: WorkerId is a string type, while QueryEngine takes WorkerThreadId (uint32_t).
-    // For now, we use the default WorkerThreadId(0) for statistics events.
-    // TODO: Extract a numeric thread ID from WorkerId if needed for statistics.
-    auto queryEngine
-        = std::make_unique<QueryEngine>(workerConfiguration.queryEngine, statisticsListener, queryLog, bufferManager);
+    /// Note: WorkerId is a string type, while QueryEngine takes WorkerThreadId (uint32_t).
+    /// For now, we use the default WorkerThreadId(0) for statistics events.
+    auto queryEngine = std::make_unique<QueryEngine>(workerConfiguration.queryEngine, statisticsListener, queryLog, bufferManager);
 
     auto sourceProvider = std::make_unique<SourceProvider>(workerConfiguration.defaultMaxInflightBuffers.getValue(), bufferManager);
 

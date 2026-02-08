@@ -1,3 +1,17 @@
+/*
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        https://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+*/
+
 #pragma once
 
 #include <adaptive_engine/Buffer.hpp>
@@ -14,7 +28,8 @@
 #include <thread>
 #include <unordered_map>
 
-namespace adaptive_engine::test {
+namespace adaptive_engine::test
+{
 
 /// Controller for TestPipeline used in C++ tests.
 ///
@@ -28,19 +43,20 @@ namespace adaptive_engine::test {
 /// auto controller = std::make_shared<TestPipelineController>();
 /// auto pipeline = std::make_unique<TestPipeline>("pipeline-1", controller);
 ///
-/// // Configure failure behavior
-/// controller->fail_on_start = true;  // Fail during start()
-/// controller->fail_on_stop = true;   // Fail during stop()
-/// controller->fail_on_nth_invocation = 3;  // Fail on 3rd execute() call
+/// /// Configure failure behavior
+/// controller->fail_on_start = true;  /// Fail during start()
+/// controller->fail_on_stop = true;   /// Fail during stop()
+/// controller->fail_on_nth_invocation = 3;  /// Fail on 3rd execute() call
 ///
-/// // Configure repeat behavior
-/// controller->repeat_count = 2;  // Repeat each buffer 2 times
+/// /// Configure repeat behavior
+/// controller->repeat_count = 2;  /// Repeat each buffer 2 times
 ///
-/// // Wait for lifecycle events
+/// /// Wait for lifecycle events
 /// ASSERT_TRUE(controller->wait_for_start());
 /// ASSERT_TRUE(controller->wait_for_stop());
 /// ```
-class TestPipelineController {
+class TestPipelineController
+{
 public:
     static constexpr std::chrono::milliseconds DEFAULT_TIMEOUT{10000};
 
@@ -52,7 +68,7 @@ public:
     TestPipelineController(TestPipelineController&&) = delete;
     TestPipelineController& operator=(TestPipelineController&&) = delete;
 
-    // Configuration flags (set before pipeline execution)
+    /// Configuration flags (set before pipeline execution)
 
     /// If true, start() will throw an exception
     std::atomic<bool> fail_on_start{false};
@@ -76,75 +92,65 @@ public:
     /// Duration to block during stop()
     std::atomic<std::chrono::milliseconds> stop_duration{std::chrono::milliseconds(0)};
 
-    // Lifecycle synchronization
+    /// Lifecycle synchronization
 
     /// Wait until the pipeline has been started.
     /// @param timeout Maximum time to wait
     /// @return true if started, false if timeout
-    [[nodiscard]] bool wait_for_start(
-        std::chrono::milliseconds timeout = DEFAULT_TIMEOUT) const {
+    [[nodiscard]] bool wait_for_start(std::chrono::milliseconds timeout = DEFAULT_TIMEOUT) const
+    {
         return wait_for_future(start_future_, timeout);
     }
 
     /// Wait until the pipeline has been stopped.
     /// @param timeout Maximum time to wait
     /// @return true if stopped, false if timeout
-    [[nodiscard]] bool wait_for_stop(
-        std::chrono::milliseconds timeout = DEFAULT_TIMEOUT) const {
+    [[nodiscard]] bool wait_for_stop(std::chrono::milliseconds timeout = DEFAULT_TIMEOUT) const
+    {
         return wait_for_future(stop_future_, timeout);
     }
 
     /// Wait until the pipeline has been destroyed.
     /// @param timeout Maximum time to wait
     /// @return true if destroyed, false if timeout
-    [[nodiscard]] bool wait_for_destruction(
-        std::chrono::milliseconds timeout = DEFAULT_TIMEOUT) const {
+    [[nodiscard]] bool wait_for_destruction(std::chrono::milliseconds timeout = DEFAULT_TIMEOUT) const
+    {
         return wait_for_future(destruction_future_, timeout);
     }
 
     /// Check if the pipeline was started (non-blocking).
-    [[nodiscard]] bool was_started() const {
-        return wait_for_future(start_future_, std::chrono::milliseconds(0));
-    }
+    [[nodiscard]] bool was_started() const { return wait_for_future(start_future_, std::chrono::milliseconds(0)); }
 
     /// Check if the pipeline was stopped (non-blocking).
-    [[nodiscard]] bool was_stopped() const {
-        return wait_for_future(stop_future_, std::chrono::milliseconds(0));
-    }
+    [[nodiscard]] bool was_stopped() const { return wait_for_future(stop_future_, std::chrono::milliseconds(0)); }
 
     /// Check if the pipeline was destroyed (non-blocking).
-    [[nodiscard]] bool was_destroyed() const {
-        return wait_for_future(destruction_future_, std::chrono::milliseconds(0));
-    }
+    [[nodiscard]] bool was_destroyed() const { return wait_for_future(destruction_future_, std::chrono::milliseconds(0)); }
 
     /// Check if the pipeline is still running (not stopped).
     /// Returns true if stop has NOT happened within timeout.
-    [[nodiscard]] bool keep_running(
-        std::chrono::milliseconds timeout = std::chrono::milliseconds(1000)) const {
+    [[nodiscard]] bool keep_running(std::chrono::milliseconds timeout = std::chrono::milliseconds(1000)) const
+    {
         return !wait_for_future(stop_future_, timeout);
     }
 
-    // Statistics
+    /// Statistics
 
     /// Get the number of times execute() was called.
-    [[nodiscard]] size_t invocations() const {
-        return invocations_.load();
-    }
+    [[nodiscard]] size_t invocations() const { return invocations_.load(); }
 
     /// Get the number of times stop() was called.
-    [[nodiscard]] size_t stop_calls() const {
-        return stop_calls_.load();
-    }
+    [[nodiscard]] size_t stop_calls() const { return stop_calls_.load(); }
 
 private:
     friend class TestPipeline;
 
-    static bool wait_for_future(const std::shared_future<void>& fut,
-                                std::chrono::milliseconds timeout) {
+    static bool wait_for_future(const std::shared_future<void>& fut, std::chrono::milliseconds timeout)
+    {
         return fut.wait_for(timeout) == std::future_status::ready;
     }
 
-    // Lifecycle promises/futures
+    /// Lifecycle promises/futures
     std::promise<void> start_promise_;
     std::promise<void> stop_promise_;
     std::promise<void> destruction_promise_;
@@ -152,18 +158,19 @@ private:
     std::shared_future<void> stop_future_{stop_promise_.get_future().share()};
     std::shared_future<void> destruction_future_{destruction_promise_.get_future().share()};
 
-    // Per-buffer repeat counter map
+    /// Per-buffer repeat counter map
     std::mutex repeat_mutex_;
     std::unordered_map<void*, uint64_t> repeat_counters_;
 
 public:
-    uint64_t get_and_increment_repeat(void* buffer_addr) {
+    uint64_t get_and_increment_repeat(void* buffer_addr)
+    {
         std::lock_guard<std::mutex> lock(repeat_mutex_);
         return repeat_counters_[buffer_addr]++;
     }
 
 private:
-    // Statistics
+    /// Statistics
     std::atomic<size_t> invocations_{0};
     std::atomic<size_t> stop_calls_{0};
 };
@@ -172,20 +179,26 @@ private:
 ///
 /// This pipeline is controlled by a TestPipelineController which allows tests
 /// to inject failures and verify lifecycle events.
-class TestPipeline : public PipelineStage {
+class TestPipeline : public PipelineStage
+{
 public:
     /// Create a test pipeline with a controller.
     /// @param id Pipeline identifier
     /// @param controller Controller for this pipeline
     TestPipeline(std::string id, std::shared_ptr<TestPipelineController> controller)
-        : id_(std::move(id))
-        , controller_(std::move(controller)) {}
+        : id_(std::move(id)), controller_(std::move(controller))
+    {
+    }
 
-    ~TestPipeline() override {
-        try {
+    ~TestPipeline() override
+    {
+        try
+        {
             controller_->destruction_promise_.set_value();
-        } catch (const std::future_error&) {
-            // Already set, ignore
+        }
+        catch (const std::future_error&)
+        {
+            /// Already set, ignore
         }
     }
 
@@ -194,88 +207,105 @@ public:
     TestPipeline(TestPipeline&&) = delete;
     TestPipeline& operator=(TestPipeline&&) = delete;
 
-    void start(ExecutionContext& /*ctx*/) override {
-        // Block if configured
+    void start(ExecutionContext& /*ctx*/) override
+    {
+        /// Block if configured
         auto duration = controller_->start_duration.load();
-        if (duration.count() > 0) {
+        if (duration.count() > 0)
+        {
             std::this_thread::sleep_for(duration);
         }
 
-        // Signal start
-        try {
+        /// Signal start
+        try
+        {
             controller_->start_promise_.set_value();
-        } catch (const std::future_error&) {
-            // Already set, ignore
+        }
+        catch (const std::future_error&)
+        {
+            /// Already set, ignore
         }
 
-        // Fail if configured
-        if (controller_->fail_on_start.load()) {
+        /// Fail if configured
+        if (controller_->fail_on_start.load())
+        {
             throw std::runtime_error("Pipeline start failed");
         }
     }
 
-    void execute(ExecutionContext& ctx, BufferHandle input) override {
+    void execute(ExecutionContext& ctx, BufferHandle input) override
+    {
         size_t invocation = controller_->invocations_.fetch_add(1) + 1;
 
-        // Check fail_on_nth_invocation
-        if (invocation == controller_->fail_on_nth_invocation.load()) {
+        /// Check fail_on_nth_invocation
+        if (invocation == controller_->fail_on_nth_invocation.load())
+        {
             throw std::runtime_error("Pipeline execute failed on invocation " + std::to_string(invocation));
         }
 
-        // Handle repeat functionality
+        /// Handle repeat functionality
         size_t max_repeats = controller_->repeat_count.load();
-        if (max_repeats > 0) {
-            // Use the opaque pointer as repeat counter key (stable identity for cloned handles)
+        if (max_repeats > 0)
+        {
+            /// Use the opaque pointer as repeat counter key (stable identity for cloned handles)
             void* buf_addr = static_cast<void*>(input.opaque);
             uint64_t current_repeat = controller_->get_and_increment_repeat(buf_addr);
-            if (current_repeat < max_repeats) {
+            if (current_repeat < max_repeats)
+            {
                 ctx.repeat_task(input);
                 return;
             }
         }
 
-        // Pass buffer downstream
+        /// Pass buffer downstream
         ctx.emit_buffer(input);
     }
 
-    void stop(ExecutionContext& ctx) override {
-        // Block if configured
+    void stop(ExecutionContext& ctx) override
+    {
+        /// Block if configured
         auto duration = controller_->stop_duration.load();
-        if (duration.count() > 0) {
+        if (duration.count() > 0)
+        {
             std::this_thread::sleep_for(duration);
         }
 
-        // Check fail_on_stop before incrementing stop count
-        if (controller_->fail_on_stop.load()) {
+        /// Check fail_on_stop before incrementing stop count
+        if (controller_->fail_on_stop.load())
+        {
             throw std::runtime_error("Pipeline stop failed");
         }
 
-        // Handle repeat during stop
+        /// Handle repeat during stop
         size_t stop_calls = controller_->stop_calls_.fetch_add(1);
         size_t repeats_during_stop = controller_->repeat_count_during_stop.load();
 
-        if (stop_calls == repeats_during_stop) {
-            // Final stop call - signal completion
-            try {
+        if (stop_calls == repeats_during_stop)
+        {
+            /// Final stop call - signal completion
+            try
+            {
                 controller_->stop_promise_.set_value();
-            } catch (const std::future_error&) {
-                // Already set, ignore
             }
-        } else if (stop_calls < repeats_during_stop) {
-            // Request another stop via repeat_task (no buffer during stop)
+            catch (const std::future_error&)
+            {
+                /// Already set, ignore
+            }
+        }
+        else if (stop_calls < repeats_during_stop)
+        {
+            /// Request another stop via repeat_task (no buffer during stop)
             ctx.repeat_task(BufferHandle{nullptr});
         }
-        // If stop_calls > repeats_during_stop, we've been called too many times
-        // but we don't throw here to avoid masking other errors
+        /// If stop_calls > repeats_during_stop, we've been called too many times
+        /// but we don't throw here to avoid masking other errors
     }
 
-    [[nodiscard]] std::string get_id() const override {
-        return id_;
-    }
+    [[nodiscard]] std::string get_id() const override { return id_; }
 
 private:
     std::string id_;
     std::shared_ptr<TestPipelineController> controller_;
 };
 
-}  // namespace adaptive_engine::test
+} /// namespace adaptive_engine::test

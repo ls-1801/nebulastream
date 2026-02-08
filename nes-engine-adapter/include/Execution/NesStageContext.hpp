@@ -37,4 +37,4 @@ public:
     [[nodiscard]] virtual std::shared_ptr<AbstractBufferProvider> getBufferProvider() const = 0;
 };
 
-}  // namespace NES
+} /// namespace NES

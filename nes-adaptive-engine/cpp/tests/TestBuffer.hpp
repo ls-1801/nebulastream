@@ -1,3 +1,17 @@
+/*
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        https://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+*/
+
 #pragma once
 
 #include <adaptive_engine/Buffer.hpp>
@@ -9,11 +23,13 @@
 #include <set>
 #include <vector>
 
-namespace adaptive_engine::test {
+namespace adaptive_engine::test
+{
 
 /// Test-only metadata for buffer tracking in test assertions.
 /// This is NOT part of the adaptive engine public API.
-struct TestBufferMetadata {
+struct TestBufferMetadata
+{
     uint64_t sequence_number{0};
     uint64_t origin_id{0};
     uint64_t watermark{0};
@@ -24,28 +40,32 @@ struct TestBufferMetadata {
 
 /// Test buffer implementation for C++ tests without NES dependencies.
 /// Inherits BufferHandleBase for provider-free clone/release via virtual dispatch.
-struct TestBuffer : BufferHandleBase {
+struct TestBuffer : BufferHandleBase
+{
     std::vector<uint8_t> data;
     TestBufferMetadata metadata;
     std::atomic<int> ref_count{1};
 
-    TestBuffer(size_t size, const TestBufferMetadata& meta)
-        : data(size), metadata(meta) {}
+    TestBuffer(size_t size, const TestBufferMetadata& meta) : data(size), metadata(meta) { }
 
-    TestBuffer(const void* src, size_t size, const TestBufferMetadata& meta)
-        : data(size), metadata(meta) {
-        if (src != nullptr && size > 0) {
+    TestBuffer(const void* src, size_t size, const TestBufferMetadata& meta) : data(size), metadata(meta)
+    {
+        if (src != nullptr && size > 0)
+        {
             std::memcpy(data.data(), src, size);
         }
     }
 
-    BufferHandleBase* do_clone() override {
+    BufferHandleBase* do_clone() override
+    {
         ref_count.fetch_add(1);
         return this;
     }
 
-    void do_release() override {
-        if (ref_count.fetch_sub(1) == 1) {
+    void do_release() override
+    {
+        if (ref_count.fetch_sub(1) == 1)
+        {
             delete this;
         }
     }
@@ -54,14 +74,16 @@ struct TestBuffer : BufferHandleBase {
 /// Test implementation of buffer management for C++ tests.
 /// Standalone utility (not a BufferProvider subclass). Tracks active
 /// buffers for leak detection in tests.
-class TestBufferProvider {
+class TestBufferProvider
+{
 public:
     TestBufferProvider() = default;
     ~TestBufferProvider() = default;
 
     /// Wrap an existing buffer with the provider.
     /// Creates a copy of the data for test isolation.
-    BufferHandle wrap(void* data, size_t size, const TestBufferMetadata& metadata) {
+    BufferHandle wrap(void* data, size_t size, const TestBufferMetadata& metadata)
+    {
         auto* buffer = new TestBuffer(data, size, metadata);
         BufferHandle handle{buffer};
 
@@ -72,19 +94,22 @@ public:
     }
 
     /// Get the data pointer for a buffer.
-    void* get_data(BufferHandle handle) {
+    void* get_data(BufferHandle handle)
+    {
         auto* buffer = static_cast<TestBuffer*>(handle.opaque);
         return buffer ? buffer->data.data() : nullptr;
     }
 
     /// Get the size of a buffer.
-    size_t get_size(BufferHandle handle) {
+    size_t get_size(BufferHandle handle)
+    {
         auto* buffer = static_cast<TestBuffer*>(handle.opaque);
         return buffer ? buffer->data.size() : 0;
     }
 
     /// Allocate a new buffer of the specified size.
-    BufferHandle allocate(size_t size) {
+    BufferHandle allocate(size_t size)
+    {
         TestBufferMetadata empty_metadata{};
         auto* buffer = new TestBuffer(size, empty_metadata);
         BufferHandle handle{buffer};
@@ -94,15 +119,18 @@ public:
         return handle;
     }
 
-    // Test utilities
+    /// Test utilities
 
     /// Get the number of active buffers (useful for leak detection in tests).
     /// Note: This checks which tracked buffers still have ref_count > 0.
-    size_t active_buffer_count() const {
+    size_t active_buffer_count() const
+    {
         std::lock_guard<std::mutex> lock(mutex_);
         size_t count = 0;
-        for (auto* buf : active_buffers_) {
-            if (buf->ref_count.load() > 0) {
+        for (auto* buf : active_buffers_)
+        {
+            if (buf->ref_count.load() > 0)
+            {
                 ++count;
             }
         }
@@ -110,7 +138,8 @@ public:
     }
 
     /// Get the reference count of a buffer (for test assertions).
-    int get_ref_count(BufferHandle handle) const {
+    int get_ref_count(BufferHandle handle) const
+    {
         auto* buffer = static_cast<TestBuffer*>(handle.opaque);
         return buffer ? buffer->ref_count.load() : 0;
     }
@@ -120,4 +149,4 @@ private:
     std::set<TestBuffer*> active_buffers_;
 };
 
-}  // namespace adaptive_engine::test
+} /// namespace adaptive_engine::test

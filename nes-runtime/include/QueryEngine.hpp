@@ -16,10 +16,10 @@
 
 #include <memory>
 #include <unordered_map>
-#include <Identifiers/Identifiers.hpp>
-#include <QueryEngineConfiguration.hpp>
 #include <Execution/NesQueryEngine.hpp>
+#include <Identifiers/Identifiers.hpp>
 #include <folly/Synchronized.h>
+#include <QueryEngineConfiguration.hpp>
 
 namespace NES
 {
@@ -104,4 +104,4 @@ private:
     folly::Synchronized<std::unordered_map<LocalQueryId, RunningQuery>> runningQueries_;
 };
 
-}  // namespace NES
+} /// namespace NES

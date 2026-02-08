@@ -11,6 +11,8 @@
     See the License for the specific language governing permissions and
     limitations under the License.
 */
+#include <Watermark/MultiOriginWatermarkProcessor.hpp>
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -21,7 +23,6 @@
 #include <Identifiers/Identifiers.hpp>
 #include <Sequencing/SequenceData.hpp>
 #include <Time/Timestamp.hpp>
-#include <Watermark/MultiOriginWatermarkProcessor.hpp>
 #include <fmt/ranges.h>
 #include <ErrorHandling.hpp>
 

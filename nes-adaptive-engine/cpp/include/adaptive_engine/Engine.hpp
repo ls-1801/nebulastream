@@ -1,3 +1,17 @@
+/*
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        https://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+*/
+
 #pragma once
 
 #include "Buffer.hpp"
@@ -9,32 +23,36 @@
 #include <memory>
 #include <vector>
 
-namespace adaptive_engine {
+namespace adaptive_engine
+{
 
 /// Unique identifier for a submitted query
 using QueryId = uint64_t;
 
 /// Edge in the query DAG, connecting source stage to target stage
-struct Edge {
-    uint64_t source_stage;  ///< Index of the source stage
-    uint64_t target_stage;  ///< Index of the target stage
+struct Edge
+{
+    uint64_t source_stage; ///< Index of the source stage
+    uint64_t target_stage; ///< Index of the target stage
 };
 
 /// Query plan describing the DAG of stages and sources
-struct QueryPlan {
-    std::vector<PipelineStage*> stages;                    ///< Pipeline stages
-    std::vector<Edge> edges;                               ///< Edges connecting stages
-    std::vector<SourceHandle*> sources;                    ///< Data sources
-    std::vector<std::pair<uint64_t, uint64_t>> source_to_stage;  ///< (source_idx, stage_idx) mappings
+struct QueryPlan
+{
+    std::vector<PipelineStage*> stages; ///< Pipeline stages
+    std::vector<Edge> edges; ///< Edges connecting stages
+    std::vector<SourceHandle*> sources; ///< Data sources
+    std::vector<std::pair<uint64_t, uint64_t>> source_to_stage; ///< (source_idx, stage_idx) mappings
 };
 
 /// Execution statistics for queries
-struct ExecutionStats {
-    uint64_t buffers_processed;   ///< Total buffers processed
-    uint64_t bytes_processed;     ///< Total bytes processed
-    uint64_t tasks_executed;      ///< Total tasks executed
-    uint64_t active_queries;      ///< Currently running queries
-    double avg_latency_ms;        ///< Average processing latency in milliseconds
+struct ExecutionStats
+{
+    uint64_t buffers_processed; ///< Total buffers processed
+    uint64_t bytes_processed; ///< Total bytes processed
+    uint64_t tasks_executed; ///< Total tasks executed
+    uint64_t active_queries; ///< Currently running queries
+    double avg_latency_ms; ///< Average processing latency in milliseconds
 };
 
 /// Abstract interface for the adaptive execution engine
@@ -48,14 +66,18 @@ struct RustStatsQueueHandle;
 ///
 /// Owns the Rust-side mpsc::Receiver<StatisticsEvent> and provides
 /// a polling interface for C++ test code to consume events.
-class StatsQueue {
+class StatsQueue
+{
 public:
-    explicit StatsQueue(RustStatsQueueHandle* handle) : handle_(handle) {}
+    explicit StatsQueue(RustStatsQueueHandle* handle) : handle_(handle) { }
+
     ~StatsQueue();
 
     StatsQueue(const StatsQueue&) = delete;
     StatsQueue& operator=(const StatsQueue&) = delete;
+
     StatsQueue(StatsQueue&& other) noexcept : handle_(other.handle_) { other.handle_ = nullptr; }
+
     StatsQueue& operator=(StatsQueue&&) = delete;
 
     /// Poll the next event from the queue.
@@ -67,13 +89,14 @@ public:
     /// @param out_to_pipeline_id To-pipeline ID string for TaskEmit (copied)
     /// @param out_task_id Task ID
     /// @return true if an event was received, false if timeout/empty
-    bool poll(uint64_t timeout_ms,
-              uint32_t& out_event_type,
-              uint64_t& out_worker_id,
-              uint64_t& out_query_id,
-              std::string& out_pipeline_id,
-              std::string& out_to_pipeline_id,
-              uint64_t& out_task_id);
+    bool poll(
+        uint64_t timeout_ms,
+        uint32_t& out_event_type,
+        uint64_t& out_worker_id,
+        uint64_t& out_query_id,
+        std::string& out_pipeline_id,
+        std::string& out_to_pipeline_id,
+        uint64_t& out_task_id);
 
     RustStatsQueueHandle* handle() const { return handle_; }
 
@@ -81,7 +104,8 @@ private:
     RustStatsQueueHandle* handle_;
 };
 
-class Engine {
+class Engine
+{
 public:
     virtual ~Engine() = default;
 
@@ -94,9 +118,7 @@ public:
     /// @param context Opaque pointer controlled by the caller (e.g., NesBufferProvider*)
     /// @param out_stats_queue Receives the stats queue for polling events
     /// @return Unique pointer to the created engine
-    static std::unique_ptr<Engine> create_with_stats(
-        void* context,
-        std::unique_ptr<StatsQueue>& out_stats_queue);
+    static std::unique_ptr<Engine> create_with_stats(void* context, std::unique_ptr<StatsQueue>& out_stats_queue);
 
     /// Start the engine's worker threads
     virtual void start() = 0;
@@ -125,4 +147,4 @@ public:
     virtual ExecutionStats get_stats() = 0;
 };
 
-}  // namespace adaptive_engine
+} /// namespace adaptive_engine

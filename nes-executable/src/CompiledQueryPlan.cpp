@@ -13,6 +13,7 @@
 */
 
 #include <CompiledQueryPlan.hpp>
+
 #include <memory>
 #include <utility>
 #include <vector>
@@ -27,15 +28,10 @@ std::unique_ptr<CompiledQueryPlan> CompiledQueryPlan::create(
     std::vector<SourceInfo> sources,
     std::vector<PendingSink> pending_sinks)
 {
-    // Use raw new since make_unique requires default constructor
-    auto* rawPlan = new CompiledQueryPlan{
-        std::move(localQueryId),
-        std::move(stages),
-        std::move(edges),
-        std::move(sources),
-        std::move(pending_sinks)
-    };
+    /// Use raw new since make_unique requires default constructor
+    auto* rawPlan
+        = new CompiledQueryPlan{std::move(localQueryId), std::move(stages), std::move(edges), std::move(sources), std::move(pending_sinks)};
     return std::unique_ptr<CompiledQueryPlan>(rawPlan);
 }
 
-}  // namespace NES
+} /// namespace NES

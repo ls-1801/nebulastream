@@ -18,10 +18,10 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <Execution/NesPipelineStage.hpp>
 #include <Runtime/Execution/OperatorHandler.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <nautilus/Engine.hpp>
-#include <Execution/NesPipelineStage.hpp>
 #include <ExecutionContext.hpp>
 #include <Pipeline.hpp>
 #include <PipelineExecutionContext.hpp>
@@ -63,10 +63,7 @@ public:
     void execute(const TupleBuffer& inputTupleBuffer, PipelineExecutionContext& pipelineExecutionContext);
     void stop(PipelineExecutionContext& pipelineExecutionContext);
 
-    friend std::ostream& operator<<(std::ostream& os, const CompiledExecutablePipelineStage& stage)
-    {
-        return stage.toString(os);
-    }
+    friend std::ostream& operator<<(std::ostream& os, const CompiledExecutablePipelineStage& stage) { return stage.toString(os); }
 
 private:
     std::ostream& toString(std::ostream& os) const;

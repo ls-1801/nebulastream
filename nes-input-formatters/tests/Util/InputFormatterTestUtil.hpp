@@ -28,10 +28,10 @@
 
 #include <DataTypes/Schema.hpp>
 #include <Identifiers/Identifiers.hpp>
-#include <Sequencing/SequenceNumber.hpp>
 #include <MemoryLayout/RowLayout.hpp>
 #include <Pipelines/CompiledExecutablePipelineStage.hpp>
 #include <Runtime/BufferManager.hpp>
+#include <Sequencing/SequenceNumber.hpp>
 #include <Sources/SourceDescriptor.hpp>
 #include <Sources/SourceHandle.hpp>
 #include <Sources/SourceReturnType.hpp>
@@ -192,10 +192,7 @@ inline void sortTupleBuffers(std::vector<TupleBuffer>& buffers)
     std::ranges::sort(
         buffers.begin(),
         buffers.end(),
-        [](const TupleBuffer& left, const TupleBuffer& right)
-        {
-            return left.getSequenceRange() < right.getSequenceRange();
-        });
+        [](const TupleBuffer& left, const TupleBuffer& right) { return left.getSequenceRange() < right.getSequenceRange(); });
 }
 
 /// Takes a vector of tuple buffers and allows to iterate over all tuples in the buffers in order

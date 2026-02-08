@@ -35,10 +35,7 @@ namespace NES
 namespace
 {
 void garbageCollectSlicesProxy(
-    OperatorHandler* ptrOpHandler,
-    const Timestamp watermarkTs,
-    SequenceRange* sequenceRangePtr,
-    const OriginId originId)
+    OperatorHandler* ptrOpHandler, const Timestamp watermarkTs, SequenceRange* sequenceRangePtr, const OriginId originId)
 {
     PRECONDITION(ptrOpHandler != nullptr, "opHandler context should not be null!");
     PRECONDITION(sequenceRangePtr != nullptr, "sequence range pointer should not be null");
@@ -86,11 +83,7 @@ void WindowProbePhysicalOperator::close(ExecutionContext& executionCtx, RecordBu
     /// Update the watermark for the probe and delete all slices that can be deleted
     const auto operatorHandlerMemRef = executionCtx.getGlobalOperatorHandler(operatorHandlerId);
     invoke(
-        garbageCollectSlicesProxy,
-        operatorHandlerMemRef,
-        executionCtx.watermarkTs,
-        executionCtx.sequenceRangePtr,
-        executionCtx.originId);
+        garbageCollectSlicesProxy, operatorHandlerMemRef, executionCtx.watermarkTs, executionCtx.sequenceRangePtr, executionCtx.originId);
 
     /// Now close for all children
     PhysicalOperatorConcept::close(executionCtx, recordBuffer);

@@ -55,7 +55,7 @@ public:
 
     ~NesExecutionContext() override = default;
 
-    // Non-copyable, non-movable (context is tied to a specific execution)
+    /// Non-copyable, non-movable (context is tied to a specific execution)
     NesExecutionContext(const NesExecutionContext&) = delete;
     NesExecutionContext& operator=(const NesExecutionContext&) = delete;
     NesExecutionContext(NesExecutionContext&&) = delete;
@@ -90,4 +90,4 @@ private:
     RepeatTaskCallback repeatCallback_;
 };
 
-}  // namespace NES
+} /// namespace NES

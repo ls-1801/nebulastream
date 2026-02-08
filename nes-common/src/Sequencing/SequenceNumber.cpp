@@ -25,9 +25,13 @@ namespace NES
 
 SequenceNumber::SequenceNumber() = default;
 
-SequenceNumber::SequenceNumber(size_t root) : components_({root}) { }
+SequenceNumber::SequenceNumber(size_t root) : components_({root})
+{
+}
 
-SequenceNumber::SequenceNumber(std::vector<size_t> components) : components_(std::move(components)) { }
+SequenceNumber::SequenceNumber(std::vector<size_t> components) : components_(std::move(components))
+{
+}
 
 SequenceNumber SequenceNumber::child(size_t offset) const
 {
@@ -80,7 +84,9 @@ std::string SequenceNumber::toString() const
     return oss.str();
 }
 
-SequenceRange::SequenceRange(SequenceNumber start, SequenceNumber end) : start(std::move(start)), end(std::move(end)) { }
+SequenceRange::SequenceRange(SequenceNumber start, SequenceNumber end) : start(std::move(start)), end(std::move(end))
+{
+}
 
 bool SequenceRange::isValid() const
 {

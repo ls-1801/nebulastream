@@ -24,8 +24,8 @@
 #include <unordered_map>
 #include <vector>
 #include <Sequencing/SequenceNumber.hpp>
-#include <gtest/gtest.h>
 #include <folly/Synchronized.h>
+#include <gtest/gtest.h>
 #include <BaseUnitTest.hpp>
 
 namespace NES
@@ -101,8 +101,7 @@ static void slidingWindowShuffle(std::vector<T>& vec, size_t windowSize, std::mt
     }
 }
 
-class ConcurrentRangeCompletionTrackerParamTest
-    : public ::testing::TestWithParam<std::tuple<size_t, size_t, size_t>>
+class ConcurrentRangeCompletionTrackerParamTest : public ::testing::TestWithParam<std::tuple<size_t, size_t, size_t>>
 {
 };
 

@@ -33,7 +33,8 @@ public:
     virtual std::optional<TupleBuffer> nextBuffer(NesStageContext& ctx) = 0;
     virtual void close(NesStageContext& ctx) = 0;
     [[nodiscard]] virtual std::string getId() const = 0;
-    virtual void requestStop() {}
+
+    virtual void requestStop() { }
 };
 
-}  // namespace NES
+} /// namespace NES

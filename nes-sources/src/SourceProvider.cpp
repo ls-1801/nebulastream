@@ -21,9 +21,9 @@
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <Sources/SourceDescriptor.hpp>
 #include <Sources/SourceHandle.hpp>
-#include <NesSourceHandle.hpp>
 #include <BackpressureChannel.hpp>
 #include <ErrorHandling.hpp>
+#include <NesSourceHandle.hpp>
 #include <SourceRegistry.hpp>
 
 namespace NES
@@ -54,8 +54,7 @@ SourceProvider::lower(OriginId originId, BackpressureListener backpressureListen
     throw UnknownSourceType("unknown source descriptor type: {}", sourceDescriptor.getSourceType());
 }
 
-std::unique_ptr<NesSourceHandle>
-SourceProvider::lowerAdaptive(OriginId originId, const SourceDescriptor& sourceDescriptor) const
+std::unique_ptr<NesSourceHandle> SourceProvider::lowerAdaptive(OriginId originId, const SourceDescriptor& sourceDescriptor) const
 {
     auto sourceArguments = SourceRegistryArguments(sourceDescriptor);
     if (auto source = SourceRegistry::instance().create(sourceDescriptor.getSourceType(), sourceArguments))

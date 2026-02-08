@@ -196,4 +196,4 @@ struct QueryEngineStatisticListener
     virtual void onEvent(Event event) = 0;
 };
 
-}  // namespace NES
+} /// namespace NES

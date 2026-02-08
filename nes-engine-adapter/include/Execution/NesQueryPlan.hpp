@@ -41,4 +41,4 @@ struct NesQueryPlan
     std::vector<std::pair<uint64_t, uint64_t>> sourceToStage;
 };
 
-}  // namespace NES
+} /// namespace NES

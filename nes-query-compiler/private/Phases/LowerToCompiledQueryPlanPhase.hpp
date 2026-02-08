@@ -19,10 +19,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include <Identifiers/Identifiers.hpp>
-#include <Util/DumpMode.hpp>
 #include <Execution/NesPipelineStage.hpp>
 #include <Execution/NesQueryPlan.hpp>
+#include <Identifiers/Identifiers.hpp>
+#include <Util/DumpMode.hpp>
 #include <CompiledQueryPlan.hpp>
 #include <PipelinedQueryPlan.hpp>
 
@@ -69,4 +69,4 @@ private:
     /// Config parameter
     DumpMode dumpQueryCompilationIntermediateRepresentations;
 };
-}  // namespace NES
+} /// namespace NES

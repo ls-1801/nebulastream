@@ -142,10 +142,7 @@ inline void writePagedSizeTupleBufferChunkToFile(
 {
     const auto numChildBuffers = numTuplesInChunk * varSizedFieldOffsets.size();
     writePagedSizeBufferChunkToFile(
-        {.numberOfTuples = numTuplesInChunk,
-         .numberChildBuffers = numChildBuffers,
-         .sequenceNumber = sequenceNumber,
-         .chunkNumber = 1},
+        {.numberOfTuples = numTuplesInChunk, .numberChildBuffers = numChildBuffers, .sequenceNumber = sequenceNumber, .chunkNumber = 1},
         sizeOfSchemaInBytes,
         pagedSizeBufferChunk,
         appendFile);
@@ -181,10 +178,7 @@ inline void sortTupleBuffers(std::vector<TupleBuffer>& buffers)
     std::ranges::sort(
         buffers.begin(),
         buffers.end(),
-        [](const TupleBuffer& left, const TupleBuffer& right)
-        {
-            return left.getSequenceRange() < right.getSequenceRange();
-        });
+        [](const TupleBuffer& left, const TupleBuffer& right) { return left.getSequenceRange() < right.getSequenceRange(); });
 }
 
 inline void writeTupleBuffersToFile(

@@ -21,18 +21,15 @@
 #include <Identifiers/Identifiers.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Time/Timestamp.hpp>
-#include <ErrorHandling.hpp>
 #include <Util/Logger/Logger.hpp>
 #include <fmt/format.h>
+#include <ErrorHandling.hpp>
 
 namespace NES
 {
 
 
-NesSourceHandle::NesSourceHandle(
-    std::unique_ptr<Source> source,
-    OriginId originId,
-    std::shared_ptr<AbstractBufferProvider> bufferProvider)
+NesSourceHandle::NesSourceHandle(std::unique_ptr<Source> source, OriginId originId, std::shared_ptr<AbstractBufferProvider> bufferProvider)
     : source_(std::move(source)), originId_(originId), bufferProvider_(std::move(bufferProvider))
 {
     PRECONDITION(source_ != nullptr, "NesSourceHandle requires a valid Source");
@@ -43,15 +40,15 @@ std::optional<TupleBuffer> NesSourceHandle::nextBuffer(NesStageContext& /*ctx*/)
 {
     PRECONDITION(opened_, "Source must be opened before calling nextBuffer");
 
-    // Get stop token for this source
+    /// Get stop token for this source
     std::stop_token stopToken = stopSource_.get_token();
     if (stopToken.stop_requested())
     {
         return std::nullopt;
     }
 
-    // Allocate a buffer from the buffer provider
-    // Try to get a pooled buffer with timeout
+    /// Allocate a buffer from the buffer provider
+    /// Try to get a pooled buffer with timeout
     std::optional<TupleBuffer> buffer;
     while (!buffer && !stopToken.stop_requested())
     {
@@ -63,17 +60,17 @@ std::optional<TupleBuffer> NesSourceHandle::nextBuffer(NesStageContext& /*ctx*/)
         return std::nullopt;
     }
 
-    // Fill the buffer using the underlying Source
+    /// Fill the buffer using the underlying Source
     Source::FillTupleBufferResult result = source_->fillTupleBuffer(*buffer, stopToken);
 
     if (result.isEoS())
     {
-        // End of stream - source is exhausted
+        /// End of stream - source is exhausted
         NES_DEBUG("NesSourceHandle {}: End of stream", originId_);
         return std::nullopt;
     }
 
-    // Set buffer metadata
+    /// Set buffer metadata
     const bool requiresMetadata = !source_->addsMetadata();
     if (requiresMetadata)
     {
@@ -81,12 +78,10 @@ std::optional<TupleBuffer> NesSourceHandle::nextBuffer(NesStageContext& /*ctx*/)
         const auto seqNum = sequenceNumber_.fetch_add(1);
         buffer->setSequenceRange(SequenceRange(SequenceNumber(seqNum), SequenceNumber(seqNum + 1)));
         buffer->setCreationTimestampInMS(Timestamp(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::high_resolution_clock::now().time_since_epoch())
-                .count()));
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count()));
     }
 
-    // Set the number of bytes read (Source uses this to communicate size)
+    /// Set the number of bytes read (Source uses this to communicate size)
     buffer->setNumberOfTuples(result.getNumberOfBytes());
 
     return std::move(*buffer);
@@ -124,4 +119,4 @@ void NesSourceHandle::requestStop()
     stopSource_.request_stop();
 }
 
-}  // namespace NES
+} /// namespace NES

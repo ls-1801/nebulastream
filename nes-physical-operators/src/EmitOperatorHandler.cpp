@@ -25,8 +25,7 @@
 namespace NES
 {
 
-void EmitOperatorHandler::assignRange(
-    const SequenceRange* inputRange, bool closesChunk, OriginId originId, TupleBuffer& outputBuffer)
+void EmitOperatorHandler::assignRange(const SequenceRange* inputRange, bool closesChunk, OriginId originId, TupleBuffer& outputBuffer)
 {
     PRECONDITION(inputRange != nullptr, "Expects a valid input range pointer");
     PRECONDITION(inputRange->isValid(), "Expects a valid input range");

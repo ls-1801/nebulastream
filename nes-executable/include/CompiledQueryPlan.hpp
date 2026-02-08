@@ -17,11 +17,11 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
+#include <Execution/NesPipelineStage.hpp>
+#include <Execution/NesQueryPlan.hpp>
 #include <Identifiers/Identifiers.hpp>
 #include <Sinks/SinkDescriptor.hpp>
 #include <Sources/SourceDescriptor.hpp>
-#include <Execution/NesQueryPlan.hpp>
-#include <Execution/NesPipelineStage.hpp>
 
 namespace NES
 {
@@ -39,7 +39,7 @@ struct CompiledQueryPlan
         OriginId originId;
         OperatorId operatorId;
         SourceDescriptor descriptor;
-        std::vector<uint64_t> target_stage_indices;  ///< Indices into stages vector
+        std::vector<uint64_t> target_stage_indices; ///< Indices into stages vector
     };
 
     /// Sink descriptor with its reserved stage index in the stages vector.
@@ -47,7 +47,7 @@ struct CompiledQueryPlan
     /// from the descriptor during query instantiation (ExecutableQueryPlan::instantiate).
     struct PendingSink
     {
-        uint64_t stage_index;  ///< Index in stages vector (nullptr placeholder)
+        uint64_t stage_index; ///< Index in stages vector (nullptr placeholder)
         PipelineId pipelineId;
         SinkDescriptor descriptor;
     };
@@ -76,4 +76,4 @@ struct CompiledQueryPlan
     std::vector<PendingSink> pending_sinks;
 };
 
-}  // namespace NES
+} /// namespace NES

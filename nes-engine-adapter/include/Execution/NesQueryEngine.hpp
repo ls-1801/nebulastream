@@ -32,8 +32,7 @@ public:
     using QueryId = uint64_t;
     using QueryTerminatedCallback = std::function<void(QueryId)>;
 
-    static std::unique_ptr<NesQueryEngine> create(
-        std::shared_ptr<AbstractBufferProvider> bufferProvider);
+    static std::unique_ptr<NesQueryEngine> create(std::shared_ptr<AbstractBufferProvider> bufferProvider);
 
     void start();
     void shutdown();
@@ -55,4 +54,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace NES
+} /// namespace NES

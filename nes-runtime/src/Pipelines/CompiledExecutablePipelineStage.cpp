@@ -45,10 +45,8 @@ class PipelineExecutionContextAdapter final : public PipelineExecutionContext
 {
 public:
     explicit PipelineExecutionContextAdapter(
-        NesStageContext& ctx,
-        std::unordered_map<OperatorHandlerId, std::shared_ptr<OperatorHandler>>& handlers)
-        : nesCtx_(ctx)
-        , operatorHandlers_(handlers)
+        NesStageContext& ctx, std::unordered_map<OperatorHandlerId, std::shared_ptr<OperatorHandler>>& handlers)
+        : nesCtx_(ctx), operatorHandlers_(handlers)
     {
     }
 
@@ -58,34 +56,19 @@ public:
         return true;
     }
 
-    void repeatTask(const TupleBuffer& /*buffer*/, std::chrono::milliseconds /*delay*/) override
-    {
-        nesCtx_.repeatTask();
-    }
+    void repeatTask(const TupleBuffer& /*buffer*/, std::chrono::milliseconds /*delay*/) override { nesCtx_.repeatTask(); }
 
-    TupleBuffer allocateTupleBuffer() override
-    {
-        return nesCtx_.allocateBuffer();
-    }
+    TupleBuffer allocateTupleBuffer() override { return nesCtx_.allocateBuffer(); }
 
     [[nodiscard]] WorkerThreadId getId() const override { return WorkerThreadId(nesCtx_.getWorkerId()); }
 
-    [[nodiscard]] uint64_t getNumberOfWorkerThreads() const override
-    {
-        return 1;
-    }
+    [[nodiscard]] uint64_t getNumberOfWorkerThreads() const override { return 1; }
 
-    [[nodiscard]] std::shared_ptr<AbstractBufferProvider> getBufferManager() const override
-    {
-        return nesCtx_.getBufferProvider();
-    }
+    [[nodiscard]] std::shared_ptr<AbstractBufferProvider> getBufferManager() const override { return nesCtx_.getBufferProvider(); }
 
     [[nodiscard]] PipelineId getPipelineId() const override { return PipelineId(nesCtx_.getPipelineId()); }
 
-    std::unordered_map<OperatorHandlerId, std::shared_ptr<OperatorHandler>>& getOperatorHandlers() override
-    {
-        return operatorHandlers_;
-    }
+    std::unordered_map<OperatorHandlerId, std::shared_ptr<OperatorHandler>>& getOperatorHandlers() override { return operatorHandlers_; }
 
     void setOperatorHandlers(std::unordered_map<OperatorHandlerId, std::shared_ptr<OperatorHandler>>& handlers) override
     {
@@ -97,7 +80,7 @@ private:
     std::unordered_map<OperatorHandlerId, std::shared_ptr<OperatorHandler>>& operatorHandlers_;
 };
 
-}  // namespace
+} /// namespace
 
 CompiledExecutablePipelineStage::CompiledExecutablePipelineStage(
     std::shared_ptr<Pipeline> pipeline,
@@ -198,7 +181,7 @@ std::string CompiledExecutablePipelineStage::getId() const
     return stageId_;
 }
 
-// Legacy PipelineExecutionContext-based interface (used by input formatter test infrastructure)
+/// Legacy PipelineExecutionContext-based interface (used by input formatter test infrastructure)
 
 void CompiledExecutablePipelineStage::start(PipelineExecutionContext& pipelineExecutionContext)
 {

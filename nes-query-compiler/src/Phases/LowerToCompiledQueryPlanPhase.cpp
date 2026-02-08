@@ -85,15 +85,12 @@ uint64_t LowerToCompiledQueryPlanPhase::processSink(const std::shared_ptr<Pipeli
     /// Record the pending sink descriptor for instantiation
     const auto sinkDescriptor = pipeline->getRootOperator().get<SinkPhysicalOperator>().getDescriptor();
     pending_sinks_.emplace_back(CompiledQueryPlan::PendingSink{
-        .stage_index = stageIndex,
-        .pipelineId = PipelineId(pipeline->getPipelineId()),
-        .descriptor = sinkDescriptor});
+        .stage_index = stageIndex, .pipelineId = PipelineId(pipeline->getPipelineId()), .descriptor = sinkDescriptor});
 
     return stageIndex;
 }
 
-std::unique_ptr<NesPipelineStage>
-LowerToCompiledQueryPlanPhase::getStage(const std::shared_ptr<Pipeline>& pipeline)
+std::unique_ptr<NesPipelineStage> LowerToCompiledQueryPlanPhase::getStage(const std::shared_ptr<Pipeline>& pipeline)
 {
     nautilus::engine::Options options;
     /// We disable multithreading in MLIR by default to not interfere with NebulaStream's thread model
@@ -164,8 +161,7 @@ uint64_t LowerToCompiledQueryPlanPhase::processOperatorPipeline(const std::share
     return stageIndex;
 }
 
-std::unique_ptr<CompiledQueryPlan>
-LowerToCompiledQueryPlanPhase::apply(const std::shared_ptr<PipelinedQueryPlan>& pipelineQueryPlan)
+std::unique_ptr<CompiledQueryPlan> LowerToCompiledQueryPlanPhase::apply(const std::shared_ptr<PipelinedQueryPlan>& pipelineQueryPlan)
 {
     this->pipelineQueryPlan = pipelineQueryPlan;
 
@@ -186,4 +182,4 @@ LowerToCompiledQueryPlanPhase::apply(const std::shared_ptr<PipelinedQueryPlan>& 
         pipelineQueryPlan->getQueryId(), std::move(stages_), std::move(edges_), std::move(sources_), std::move(pending_sinks_));
 }
 
-}  // namespace NES
+} /// namespace NES

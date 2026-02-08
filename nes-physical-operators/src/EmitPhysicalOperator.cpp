@@ -95,18 +95,13 @@ void assignRange(
     const nautilus::val<TupleBuffer*>& newBuffer)
 {
     nautilus::invoke(
-        +[](OperatorHandler* handler,
-            bool closesChunk,
-            SequenceRange* inputRangePtr,
-            OriginId originId,
-            TupleBuffer* newBuffer)
+        +[](OperatorHandler* handler, bool closesChunk, SequenceRange* inputRangePtr, OriginId originId, TupleBuffer* newBuffer)
         {
             PRECONDITION(handler != nullptr, "Expects a valid handler");
             PRECONDITION(newBuffer != nullptr, "Expects a valid buffer");
             PRECONDITION(inputRangePtr != nullptr, "Expects a valid input range pointer");
 
-            dynamic_cast<EmitOperatorHandler&>(*handler).assignRange(
-                inputRangePtr, closesChunk, originId, *newBuffer);
+            dynamic_cast<EmitOperatorHandler&>(*handler).assignRange(inputRangePtr, closesChunk, originId, *newBuffer);
         },
         context.getGlobalOperatorHandler(operatorHandlerId),
         closesChunk,

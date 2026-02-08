@@ -73,9 +73,9 @@ template <>
 class RangeCompletionTracker<void, MaxCombine> : public RangeCompletionTrackerBase
 {
 public:
-    using RangeCompletionTrackerBase::insert;
     using RangeCompletionTrackerBase::getCompletedUpTo;
     using RangeCompletionTrackerBase::getHighestSeen;
+    using RangeCompletionTrackerBase::insert;
 };
 
 /// Valued specialization: associates a value T with each range fragment.
