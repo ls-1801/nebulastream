@@ -20,9 +20,9 @@
 
 use crate::executor::QueryId;
 use crate::pipeline::{Buffer, PipelineError, PipelineId};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::Mutex;
 
 /// Execution context provided to pipelines during execution.
 ///

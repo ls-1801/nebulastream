@@ -120,6 +120,14 @@ public:
     /// @return Unique pointer to the created engine
     static std::unique_ptr<Engine> create_with_stats(void* context, std::unique_ptr<StatsQueue>& out_stats_queue);
 
+    /// Create an engine instance with worker threads and statistics collection
+    /// @param context Opaque pointer controlled by the caller (e.g., NesBufferProvider*)
+    /// @param num_workers Number of worker threads
+    /// @param out_stats_queue Receives the stats queue for polling events
+    /// @return Unique pointer to the created engine
+    static std::unique_ptr<Engine>
+    create_with_workers_and_stats(void* context, size_t num_workers, std::unique_ptr<StatsQueue>& out_stats_queue);
+
     /// Start the engine's worker threads
     virtual void start() = 0;
 

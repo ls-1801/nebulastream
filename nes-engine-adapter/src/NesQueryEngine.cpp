@@ -35,10 +35,11 @@ constexpr uint32_t FFI_EVENT_QUERY_TERMINATED = 9;
 class NesQueryEngine::Impl
 {
 public:
-    explicit Impl(std::shared_ptr<AbstractBufferProvider> bufferProvider)
+    explicit Impl(std::shared_ptr<AbstractBufferProvider> bufferProvider, size_t numWorkerThreads)
         : bufferProvider_(std::make_unique<NesBufferProvider>(std::move(bufferProvider)))
     {
-        engine_ = adaptive_engine::Engine::create_with_stats(static_cast<void*>(bufferProvider_.get()), statsQueue_);
+        engine_ = adaptive_engine::Engine::create_with_workers_and_stats(
+            static_cast<void*>(bufferProvider_.get()), numWorkerThreads, statsQueue_);
     }
 
     ~Impl()
@@ -176,10 +177,10 @@ NesQueryEngine::NesQueryEngine() = default;
 
 NesQueryEngine::~NesQueryEngine() = default;
 
-std::unique_ptr<NesQueryEngine> NesQueryEngine::create(std::shared_ptr<AbstractBufferProvider> bufferProvider)
+std::unique_ptr<NesQueryEngine> NesQueryEngine::create(std::shared_ptr<AbstractBufferProvider> bufferProvider, size_t numWorkerThreads)
 {
     auto engine = std::unique_ptr<NesQueryEngine>(new NesQueryEngine());
-    engine->impl_ = std::make_unique<Impl>(std::move(bufferProvider));
+    engine->impl_ = std::make_unique<Impl>(std::move(bufferProvider), numWorkerThreads);
     return engine;
 }
 

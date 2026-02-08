@@ -32,7 +32,8 @@ public:
     QueryEngineConfiguration(const std::string& name, const std::string& description) : BaseConfiguration(name, description) { }
 
     /// Number of worker threads for query execution.
-    /// Default is 4 threads.
+    /// Default is 4 threads. Pipeline stages must be thread-safe,
+    /// as multiple workers may concurrently execute the same pipeline stage on different buffers.
     UIntOption numWorkerThreads
         = {"num_worker_threads", "4", "Number of worker threads for query execution", {std::make_shared<NumberValidation>()}};
 

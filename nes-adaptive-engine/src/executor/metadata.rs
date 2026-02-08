@@ -14,8 +14,8 @@
 
 //! Pipeline metadata for reference counting and lifecycle management.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 /// Metadata for tracking pipeline execution state.
 ///
@@ -71,6 +71,12 @@ pub struct PipelineMetadata {
     /// this flag via SourceEmitHandle::should_stop(). Only meaningful for
     /// source nodes; regular pipelines ignore this field.
     pub source_stop_requested: Arc<AtomicBool>,
+
+    /// Whether a StopPipelineTask has already been enqueued for this pipeline.
+    ///
+    /// Used to prevent duplicate StopPipelineTask enqueues when multiple
+    /// workers concurrently observe should_terminate() && pending == 0.
+    pub stop_task_enqueued: AtomicBool,
 }
 
 impl PipelineMetadata {
@@ -84,6 +90,7 @@ impl PipelineMetadata {
             eos_received: AtomicUsize::new(0),
             source_started: AtomicBool::new(false),
             source_stop_requested: Arc::new(AtomicBool::new(false)),
+            stop_task_enqueued: AtomicBool::new(false),
         }
     }
 

@@ -143,4 +143,17 @@ impl ExecutionStats {
     pub fn first_error(&self) -> Option<&ExecutionError> {
         self.errors.first()
     }
+
+    /// Merge another `ExecutionStats` into this one by summing counters
+    /// and extending error lists.
+    pub fn merge(&mut self, other: ExecutionStats) {
+        self.tasks_executed += other.tasks_executed;
+        self.buffers_processed += other.buffers_processed;
+        self.pipelines_started += other.pipelines_started;
+        self.pipelines_stopped += other.pipelines_stopped;
+        self.graphs_deployed += other.graphs_deployed;
+        self.errors_encountered += other.errors_encountered;
+        self.tasks_skipped += other.tasks_skipped;
+        self.errors.extend(other.errors);
+    }
 }

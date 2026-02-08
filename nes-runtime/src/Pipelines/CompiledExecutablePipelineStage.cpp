@@ -62,7 +62,7 @@ public:
 
     [[nodiscard]] WorkerThreadId getId() const override { return WorkerThreadId(nesCtx_.getWorkerId()); }
 
-    [[nodiscard]] uint64_t getNumberOfWorkerThreads() const override { return 1; }
+    [[nodiscard]] uint64_t getNumberOfWorkerThreads() const override { return nesCtx_.getWorkerCount(); }
 
     [[nodiscard]] std::shared_ptr<AbstractBufferProvider> getBufferManager() const override { return nesCtx_.getBufferProvider(); }
 

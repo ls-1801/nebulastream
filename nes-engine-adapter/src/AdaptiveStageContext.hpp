@@ -42,6 +42,8 @@ public:
 
     [[nodiscard]] uint32_t getWorkerId() const override { return ctx_.get_worker_id(); }
 
+    [[nodiscard]] uint64_t getWorkerCount() const override { return ctx_.get_worker_count(); }
+
     [[nodiscard]] uint64_t getPipelineId() const override { return ctx_.get_pipeline_id(); }
 
     TupleBuffer allocateBuffer() override

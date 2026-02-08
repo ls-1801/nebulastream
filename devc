@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-WORKSPACE="$(cd "$(dirname "$0")/.." && pwd)"
+WORKSPACE="$(pwd)"
 
 exec docker run --rm \
     -v "${WORKSPACE}:/workspace" \
@@ -19,5 +19,4 @@ exec docker run --rm \
     -v $HOME/.claude:$HOME/.claude \
     -w /workspace \
     -it \
-    nebulastream/nes-development:claude \
-    $HOME/.local/bin/claude --allow-dangerously-skip-permissions "$@" 
+    nebulastream/nes-development:claude 

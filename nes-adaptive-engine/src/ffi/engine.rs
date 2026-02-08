@@ -72,8 +72,12 @@ impl EngineHandle {
     /// # Returns
     /// A new EngineHandle ready to be started
     pub fn new(context_ptr: usize) -> Self {
-        // Create executor and get handle before storing
-        let executor = Executor::new();
+        Self::new_with_workers(context_ptr, 1)
+    }
+
+    /// Create a new engine handle with the specified number of worker threads.
+    pub fn new_with_workers(context_ptr: usize, num_workers: usize) -> Self {
+        let executor = Executor::with_worker_count(num_workers);
         let handle = executor.get_handle();
 
         Self {
@@ -89,9 +93,17 @@ impl EngineHandle {
     ///
     /// Returns both the engine handle and a stats queue for polling events.
     pub fn new_with_stats(context_ptr: usize) -> (Self, StatsQueueHandle) {
+        Self::new_with_workers_and_stats(context_ptr, 1)
+    }
+
+    /// Create a new engine handle with worker threads and statistics collection.
+    pub fn new_with_workers_and_stats(
+        context_ptr: usize,
+        num_workers: usize,
+    ) -> (Self, StatsQueueHandle) {
         let (tx, rx) = mpsc::channel::<StatisticsEvent>();
         let sender = StatisticsSender::new(tx);
-        let executor = Executor::with_queue_and_stats(crate::executor::FifoQueue::new(), sender);
+        let executor = Executor::with_worker_count_and_stats(num_workers, sender);
         let handle = executor.get_handle();
 
         let engine = Self {
@@ -278,6 +290,18 @@ pub fn engine_create(context_ptr: usize) -> Box<EngineHandle> {
     Box::new(EngineHandle::new(context_ptr))
 }
 
+/// Create a new engine instance with the specified number of worker threads.
+///
+/// # Arguments
+/// * `context_ptr` - Opaque context pointer
+/// * `num_workers` - Number of worker threads (minimum 1)
+///
+/// # Returns
+/// Box containing the new EngineHandle
+pub fn engine_create_with_workers(context_ptr: usize, num_workers: usize) -> Box<EngineHandle> {
+    Box::new(EngineHandle::new_with_workers(context_ptr, num_workers))
+}
+
 /// Start the engine's worker threads.
 ///
 /// # Arguments
@@ -454,6 +478,22 @@ pub fn engine_stop_query(engine: &EngineHandle, query_id: QueryId) -> bool {
 #[no_mangle]
 pub extern "C" fn engine_create_ffi(context_ptr: usize) -> *mut EngineHandle {
     Box::into_raw(Box::new(EngineHandle::new(context_ptr)))
+}
+
+/// Create a new engine instance with the specified number of worker threads (C FFI).
+///
+/// # Safety
+/// The caller must ensure the returned pointer is eventually freed with `engine_destroy`.
+#[cfg(feature = "cpp-ffi")]
+#[no_mangle]
+pub extern "C" fn engine_create_with_workers_ffi(
+    context_ptr: usize,
+    num_workers: usize,
+) -> *mut EngineHandle {
+    Box::into_raw(Box::new(EngineHandle::new_with_workers(
+        context_ptr,
+        num_workers,
+    )))
 }
 
 /// Start the engine's worker threads (C FFI).
@@ -642,6 +682,27 @@ pub unsafe extern "C" fn engine_create_with_stats_ffi(
     out_stats: *mut *mut StatsQueueHandle,
 ) -> *mut EngineHandle {
     let (engine, stats) = EngineHandle::new_with_stats(context_ptr);
+
+    if !out_stats.is_null() {
+        unsafe { *out_stats = Box::into_raw(Box::new(stats)) };
+    }
+
+    Box::into_raw(Box::new(engine))
+}
+
+/// Create a new engine instance with worker threads and statistics collection (C FFI).
+///
+/// # Safety
+/// The caller must ensure out_stats is a valid pointer.
+/// The returned pointers must be freed with `engine_destroy` and `stats_queue_destroy`.
+#[cfg(feature = "cpp-ffi")]
+#[no_mangle]
+pub unsafe extern "C" fn engine_create_with_workers_and_stats_ffi(
+    context_ptr: usize,
+    num_workers: usize,
+    out_stats: *mut *mut StatsQueueHandle,
+) -> *mut EngineHandle {
+    let (engine, stats) = EngineHandle::new_with_workers_and_stats(context_ptr, num_workers);
 
     if !out_stats.is_null() {
         unsafe { *out_stats = Box::into_raw(Box::new(stats)) };

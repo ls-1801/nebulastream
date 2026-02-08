@@ -43,6 +43,10 @@ public:
     /// @return Worker identifier (0-based)
     virtual uint32_t get_worker_id() const = 0;
 
+    /// Get the total number of worker threads
+    /// @return Total worker count
+    virtual uint64_t get_worker_count() const = 0;
+
     /// Get the pipeline ID this context belongs to
     /// @return Pipeline identifier
     virtual uint64_t get_pipeline_id() const = 0;

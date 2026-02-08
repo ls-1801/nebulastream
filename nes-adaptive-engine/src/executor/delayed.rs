@@ -116,17 +116,21 @@ impl DelayedTaskSubmitter {
     /// # Arguments
     ///
     /// * `task_queue` - The executor's task queue where delayed tasks will be pushed
+    /// * `task_available` - Condvar to notify worker threads when a delayed task is pushed
     ///
     /// # Returns
     ///
     /// A new DelayedTaskSubmitter with a running background thread.
-    pub fn new(task_queue: Arc<Mutex<Box<dyn TaskQueue>>>) -> Self {
+    pub fn new(
+        task_queue: Arc<Mutex<Box<dyn TaskQueue>>>,
+        task_available: Arc<std::sync::Condvar>,
+    ) -> Self {
         let (sender, receiver) = std::sync::mpsc::channel::<DelayedMessage>();
         let shutdown_signal = Arc::new((Mutex::new(false), Condvar::new()));
         let shutdown_signal_clone = Arc::clone(&shutdown_signal);
 
         let thread_handle = thread::spawn(move || {
-            Self::run_loop(receiver, task_queue, shutdown_signal_clone);
+            Self::run_loop(receiver, task_queue, shutdown_signal_clone, task_available);
         });
 
         Self {
@@ -153,6 +157,7 @@ impl DelayedTaskSubmitter {
         receiver: std::sync::mpsc::Receiver<DelayedMessage>,
         task_queue: Arc<Mutex<Box<dyn TaskQueue>>>,
         shutdown_signal: Arc<(Mutex<bool>, Condvar)>,
+        task_available: Arc<std::sync::Condvar>,
     ) {
         loop {
             // Wait for a message
@@ -180,6 +185,8 @@ impl DelayedTaskSubmitter {
                     if let Ok(mut queue) = task_queue.lock() {
                         queue.push(*task);
                     }
+                    // Notify a worker that a task is available
+                    task_available.notify_one();
                     // If lock fails, silently drop the task (executor is likely shutting down)
                 }
                 Ok(DelayedMessage::Shutdown) => {
@@ -243,11 +250,15 @@ mod tests {
     use crate::pipeline::{Buffer, PipelineId};
     use std::time::Instant;
 
+    fn make_condvar() -> Arc<std::sync::Condvar> {
+        Arc::new(std::sync::Condvar::new())
+    }
+
     #[test]
     fn test_delayed_submitter_creation() {
         let queue: Arc<Mutex<Box<dyn TaskQueue>>> =
             Arc::new(Mutex::new(Box::new(FifoQueue::new())));
-        let submitter = DelayedTaskSubmitter::new(queue);
+        let submitter = DelayedTaskSubmitter::new(queue, make_condvar());
 
         // Should be able to get a handle
         let _handle = submitter.get_handle();
@@ -260,7 +271,7 @@ mod tests {
     fn test_immediate_resubmission() {
         let queue: Arc<Mutex<Box<dyn TaskQueue>>> =
             Arc::new(Mutex::new(Box::new(FifoQueue::new())));
-        let submitter = DelayedTaskSubmitter::new(Arc::clone(&queue));
+        let submitter = DelayedTaskSubmitter::new(Arc::clone(&queue), make_condvar());
         let handle = submitter.get_handle();
 
         // Submit a task with 0 delay
@@ -288,7 +299,7 @@ mod tests {
     fn test_delayed_resubmission() {
         let queue: Arc<Mutex<Box<dyn TaskQueue>>> =
             Arc::new(Mutex::new(Box::new(FifoQueue::new())));
-        let submitter = DelayedTaskSubmitter::new(Arc::clone(&queue));
+        let submitter = DelayedTaskSubmitter::new(Arc::clone(&queue), make_condvar());
         let handle = submitter.get_handle();
 
         let start = Instant::now();
@@ -327,7 +338,7 @@ mod tests {
     fn test_shutdown_discards_pending() {
         let queue: Arc<Mutex<Box<dyn TaskQueue>>> =
             Arc::new(Mutex::new(Box::new(FifoQueue::new())));
-        let submitter = DelayedTaskSubmitter::new(Arc::clone(&queue));
+        let submitter = DelayedTaskSubmitter::new(Arc::clone(&queue), make_condvar());
         let handle = submitter.get_handle();
 
         // Submit a task with long delay
@@ -352,7 +363,7 @@ mod tests {
     fn test_handle_cloning() {
         let queue: Arc<Mutex<Box<dyn TaskQueue>>> =
             Arc::new(Mutex::new(Box::new(FifoQueue::new())));
-        let submitter = DelayedTaskSubmitter::new(Arc::clone(&queue));
+        let submitter = DelayedTaskSubmitter::new(Arc::clone(&queue), make_condvar());
 
         let handle1 = submitter.get_handle();
         let handle2 = handle1.clone();

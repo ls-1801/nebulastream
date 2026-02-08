@@ -33,9 +33,7 @@
 //! ```
 
 use crate::executor::stats::{StatisticsEvent, StatisticsSender};
-use crate::executor::{
-    ExecutionStats, Executor, ExecutorError, ExecutorHandle, FifoQueue, QueryId,
-};
+use crate::executor::{ExecutionStats, Executor, ExecutorError, ExecutorHandle, QueryId};
 use crate::graph::PipelineGraph;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -56,7 +54,12 @@ pub struct Engine {
 impl Engine {
     /// Create a new engine without statistics collection.
     pub fn new() -> Self {
-        let executor = Executor::new();
+        Self::with_worker_count(1)
+    }
+
+    /// Create a new engine with the specified number of worker threads.
+    pub fn with_worker_count(worker_count: usize) -> Self {
+        let executor = Executor::with_worker_count(worker_count);
         let handle = executor.get_handle();
         Self {
             executor_handle: Some(handle),
@@ -70,9 +73,15 @@ impl Engine {
     ///
     /// Returns the engine and a `StatsReceiver` for polling statistics events.
     pub fn with_stats() -> (Self, StatsReceiver) {
+        Self::with_worker_count_and_stats(1)
+    }
+
+    /// Create a new engine with the specified number of worker threads and
+    /// statistics collection enabled.
+    pub fn with_worker_count_and_stats(worker_count: usize) -> (Self, StatsReceiver) {
         let (tx, rx) = mpsc::channel::<StatisticsEvent>();
         let sender = StatisticsSender::new(tx);
-        let executor = Executor::with_queue_and_stats(FifoQueue::new(), sender);
+        let executor = Executor::with_worker_count_and_stats(worker_count, sender);
         let handle = executor.get_handle();
 
         let engine = Self {

@@ -265,6 +265,7 @@ pub struct SourceEmitHandle {
     query_id: u64,
     task_queue: Arc<Mutex<Box<dyn TaskQueue>>>,
     stop_requested: Arc<AtomicBool>,
+    task_available: Arc<std::sync::Condvar>,
 }
 
 impl SourceEmitHandle {
@@ -279,17 +280,20 @@ impl SourceEmitHandle {
     /// * `query_id` - ID of the query this source belongs to
     /// * `task_queue` - Task queue for submitting buffers
     /// * `stop_requested` - Shared flag indicating if the source should stop
+    /// * `task_available` - Condvar to notify worker threads of new tasks
     pub(crate) fn new(
         source_id: PipelineId,
         query_id: u64,
         task_queue: Arc<Mutex<Box<dyn TaskQueue>>>,
         stop_requested: Arc<AtomicBool>,
+        task_available: Arc<std::sync::Condvar>,
     ) -> Self {
         Self {
             source_id,
             query_id,
             task_queue,
             stop_requested,
+            task_available,
         }
     }
 
@@ -322,6 +326,7 @@ impl SourceEmitHandle {
             .map_err(|e| SourceError::EmitFailed(format!("Failed to lock task queue: {}", e)))?
             .push(task);
 
+        self.task_available.notify_one();
         Ok(())
     }
 
@@ -354,6 +359,7 @@ impl SourceEmitHandle {
             .map_err(|e| SourceError::EmitFailed(format!("Failed to lock task queue: {}", e)))?
             .push(task);
 
+        self.task_available.notify_one();
         Ok(())
     }
 
@@ -374,6 +380,7 @@ impl SourceEmitHandle {
             .map_err(|e| SourceError::EmitFailed(format!("Failed to lock task queue: {}", e)))?
             .push(task);
 
+        self.task_available.notify_one();
         Ok(())
     }
 }

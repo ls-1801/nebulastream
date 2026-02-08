@@ -43,7 +43,7 @@ QueryEngine::QueryEngine(
 {
     NES_INFO("Creating QueryEngine with {} worker threads", config_.numWorkerThreads.getValue());
 
-    engine_ = NesQueryEngine::create(bufferManager);
+    engine_ = NesQueryEngine::create(bufferManager, config_.numWorkerThreads.getValue());
     engine_->setQueryTerminatedCallback([this](NesQueryEngine::QueryId engineQueryId) { handleQueryTerminated(engineQueryId); });
     engine_->start();
 

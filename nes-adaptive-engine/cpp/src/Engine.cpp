@@ -38,6 +38,9 @@ RustEngineHandle* engine_create_ffi(uintptr_t context_ptr);
 /// Create a new engine instance with statistics collection
 RustEngineHandle* engine_create_with_stats_ffi(uintptr_t context_ptr, RustStatsQueueHandle** out_stats);
 
+/// Create a new engine instance with worker threads and statistics collection
+RustEngineHandle* engine_create_with_workers_and_stats_ffi(uintptr_t context_ptr, size_t num_workers, RustStatsQueueHandle** out_stats);
+
 /// Start the engine's worker threads
 void engine_start_ffi(const RustEngineHandle* engine);
 
@@ -316,6 +319,23 @@ std::unique_ptr<Engine> Engine::create_with_stats(void* context, std::unique_ptr
 {
     RustStatsQueueHandle* stats_handle = nullptr;
     auto* handle = engine_create_with_stats_ffi(reinterpret_cast<uintptr_t>(context), &stats_handle);
+    if (!handle)
+    {
+        return nullptr;
+    }
+    if (stats_handle)
+    {
+        out_stats_queue = std::make_unique<StatsQueue>(stats_handle);
+    }
+    return std::make_unique<EngineImpl>(handle);
+}
+
+/// Static factory method with worker threads and statistics collection
+std::unique_ptr<Engine>
+Engine::create_with_workers_and_stats(void* context, size_t num_workers, std::unique_ptr<StatsQueue>& out_stats_queue)
+{
+    RustStatsQueueHandle* stats_handle = nullptr;
+    auto* handle = engine_create_with_workers_and_stats_ffi(reinterpret_cast<uintptr_t>(context), num_workers, &stats_handle);
     if (!handle)
     {
         return nullptr;

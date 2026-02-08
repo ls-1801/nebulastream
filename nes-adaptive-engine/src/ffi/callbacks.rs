@@ -81,8 +81,11 @@ impl CppPipelineStage {
 }
 
 impl Pipeline for CppPipelineStage {
-    fn setup(&self, _context: &dyn PipelineExecutionContext) -> Result<(), PipelineError> {
-        let result = unsafe { stage_start(self.stage_ptr, self.context_ptr) };
+    fn setup(&self, context: &dyn PipelineExecutionContext) -> Result<(), PipelineError> {
+        let worker_id = context.get_worker_id() as u32;
+        let worker_count = context.get_worker_count() as u64;
+        let result =
+            unsafe { stage_start(self.stage_ptr, self.context_ptr, worker_id, worker_count) };
         if result == 0 {
             Err(PipelineError::ExecutionFailed(
                 "C++ stage start() failed".to_string(),
@@ -102,8 +105,17 @@ impl Pipeline for CppPipelineStage {
             .opaque_handle()
             .expect("CppPipelineStage::execute requires an opaque buffer handle");
 
-        let result =
-            unsafe { stage_execute_with_handle(self.stage_ptr, self.context_ptr, opaque.handle()) };
+        let worker_id = context.get_worker_id() as u32;
+        let worker_count = context.get_worker_count() as u64;
+        let result = unsafe {
+            stage_execute_with_handle(
+                self.stage_ptr,
+                self.context_ptr,
+                opaque.handle(),
+                worker_id,
+                worker_count,
+            )
+        };
 
         if result == 0 {
             return Err(PipelineError::ExecutionFailed(
@@ -134,12 +146,15 @@ impl Pipeline for CppPipelineStage {
         Ok(buffers)
     }
 
-    fn flush(&self, _context: &dyn PipelineExecutionContext) -> Result<Vec<Buffer>, PipelineError> {
+    fn flush(&self, context: &dyn PipelineExecutionContext) -> Result<Vec<Buffer>, PipelineError> {
         // Call C++ stage stop() which triggers terminate() on windowed operators,
         // flushing all remaining windows. Collect emitted buffers from TLS just
         // like execute() does.
+        let worker_id = context.get_worker_id() as u32;
+        let worker_count = context.get_worker_count() as u64;
         loop {
-            let result = unsafe { stage_stop(self.stage_ptr, self.context_ptr) };
+            let result =
+                unsafe { stage_stop(self.stage_ptr, self.context_ptr, worker_id, worker_count) };
             if result == 0 {
                 return Err(PipelineError::ExecutionFailed(
                     "C++ stage stop() failed".to_string(),
@@ -462,10 +477,15 @@ impl Source for CppSourceAdapter {
 
 extern "C" {
     // Stage callbacks
-    fn stage_start(stage_ptr: usize, context_ptr: usize) -> i32;
-    fn stage_execute_with_handle(stage_ptr: usize, context_ptr: usize, opaque_handle: usize)
-    -> i32;
-    fn stage_stop(stage_ptr: usize, context_ptr: usize) -> i32;
+    fn stage_start(stage_ptr: usize, context_ptr: usize, worker_id: u32, worker_count: u64) -> i32;
+    fn stage_execute_with_handle(
+        stage_ptr: usize,
+        context_ptr: usize,
+        opaque_handle: usize,
+        worker_id: u32,
+        worker_count: u64,
+    ) -> i32;
+    fn stage_stop(stage_ptr: usize, context_ptr: usize, worker_id: u32, worker_count: u64) -> i32;
 
     // Emitted buffer retrieval (thread-local storage access)
     fn stage_get_emitted_count() -> usize;

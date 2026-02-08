@@ -32,6 +32,7 @@ public:
     virtual void emitBuffer(const TupleBuffer& buffer) = 0;
     virtual void repeatTask() = 0;
     [[nodiscard]] virtual uint32_t getWorkerId() const = 0;
+    [[nodiscard]] virtual uint64_t getWorkerCount() const = 0;
     [[nodiscard]] virtual uint64_t getPipelineId() const = 0;
     virtual TupleBuffer allocateBuffer() = 0;
     [[nodiscard]] virtual std::shared_ptr<AbstractBufferProvider> getBufferProvider() const = 0;

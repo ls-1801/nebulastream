@@ -20,8 +20,8 @@
 #![allow(dead_code)]
 
 use adaptive_engine::engine::StatsReceiver;
-use adaptive_engine::executor::QueryId;
 use adaptive_engine::executor::stats::StatisticsEvent;
+use adaptive_engine::executor::QueryId;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;

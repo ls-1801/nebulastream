@@ -54,7 +54,10 @@ thread_local bool g_repeat_requested = false;
 class FfiExecutionContext : public adaptive_engine::ExecutionContext
 {
 public:
-    explicit FfiExecutionContext(void* context_ptr) : context_ptr_(context_ptr) { }
+    FfiExecutionContext(void* context_ptr, uint32_t worker_id, uint64_t worker_count)
+        : context_ptr_(context_ptr), worker_id_(worker_id), worker_count_(worker_count)
+    {
+    }
 
     void emit_buffer(adaptive_engine::BufferHandle handle) override
     {
@@ -72,7 +75,9 @@ public:
         g_repeat_requested = true;
     }
 
-    uint32_t get_worker_id() const override { return 0; }
+    uint32_t get_worker_id() const override { return worker_id_; }
+
+    uint64_t get_worker_count() const override { return worker_count_; }
 
     uint64_t get_pipeline_id() const override { return 0; }
 
@@ -80,6 +85,8 @@ public:
 
 private:
     void* context_ptr_;
+    uint32_t worker_id_;
+    uint64_t worker_count_;
 };
 
 } /// namespace
@@ -93,8 +100,10 @@ extern "C" {
 /// Call C++ PipelineStage::start()
 /// @param stage_ptr Pointer to C++ PipelineStage
 /// @param context_ptr Opaque context pointer
+/// @param worker_id Worker thread ID (0-based)
+/// @param worker_count Total number of worker threads
 /// @return 1 on success, 0 on failure
-int32_t stage_start(uintptr_t stage_ptr, uintptr_t context_ptr)
+int32_t stage_start(uintptr_t stage_ptr, uintptr_t context_ptr, uint32_t worker_id, uint64_t worker_count)
 {
     if (stage_ptr == 0)
     {
@@ -103,7 +112,7 @@ int32_t stage_start(uintptr_t stage_ptr, uintptr_t context_ptr)
     auto* stage = reinterpret_cast<adaptive_engine::PipelineStage*>(stage_ptr);
     CPPTRACE_TRY
     {
-        FfiExecutionContext ctx(reinterpret_cast<void*>(context_ptr));
+        FfiExecutionContext ctx(reinterpret_cast<void*>(context_ptr), worker_id, worker_count);
         stage->start(ctx);
         return 1;
     }
@@ -126,8 +135,11 @@ int32_t stage_start(uintptr_t stage_ptr, uintptr_t context_ptr)
 /// @param stage_ptr Pointer to C++ PipelineStage
 /// @param context_ptr Opaque context pointer
 /// @param opaque_handle The opaque buffer handle to pass to the stage
+/// @param worker_id Worker thread ID (0-based)
+/// @param worker_count Total number of worker threads
 /// @return 1 on success, 0 on failure
-int32_t stage_execute_with_handle(uintptr_t stage_ptr, uintptr_t context_ptr, uintptr_t opaque_handle)
+int32_t
+stage_execute_with_handle(uintptr_t stage_ptr, uintptr_t context_ptr, uintptr_t opaque_handle, uint32_t worker_id, uint64_t worker_count)
 {
     if (stage_ptr == 0 || opaque_handle == 0)
     {
@@ -143,7 +155,7 @@ int32_t stage_execute_with_handle(uintptr_t stage_ptr, uintptr_t context_ptr, ui
         g_emitted_buffer_data.clear();
         g_repeat_requested = false;
 
-        FfiExecutionContext ctx(reinterpret_cast<void*>(context_ptr));
+        FfiExecutionContext ctx(reinterpret_cast<void*>(context_ptr), worker_id, worker_count);
         stage->execute(ctx, input);
 
         /// Do NOT release the input buffer - Rust manages lifetime
@@ -160,8 +172,10 @@ int32_t stage_execute_with_handle(uintptr_t stage_ptr, uintptr_t context_ptr, ui
 /// Call C++ PipelineStage::stop()
 /// @param stage_ptr Pointer to C++ PipelineStage
 /// @param context_ptr Opaque context pointer
+/// @param worker_id Worker thread ID (0-based)
+/// @param worker_count Total number of worker threads
 /// @return 1 on success, 0 on failure
-int32_t stage_stop(uintptr_t stage_ptr, uintptr_t context_ptr)
+int32_t stage_stop(uintptr_t stage_ptr, uintptr_t context_ptr, uint32_t worker_id, uint64_t worker_count)
 {
     if (stage_ptr == 0)
     {
@@ -174,7 +188,7 @@ int32_t stage_stop(uintptr_t stage_ptr, uintptr_t context_ptr)
         g_emitted_buffer_data.clear();
         g_repeat_requested = false;
 
-        FfiExecutionContext ctx(reinterpret_cast<void*>(context_ptr));
+        FfiExecutionContext ctx(reinterpret_cast<void*>(context_ptr), worker_id, worker_count);
         stage->stop(ctx);
         return 1;
     }
@@ -228,7 +242,7 @@ int32_t source_open(uintptr_t source_ptr, uintptr_t context_ptr)
     auto* source = reinterpret_cast<adaptive_engine::SourceHandle*>(source_ptr);
     CPPTRACE_TRY
     {
-        FfiExecutionContext ctx(reinterpret_cast<void*>(context_ptr));
+        FfiExecutionContext ctx(reinterpret_cast<void*>(context_ptr), 0, 1);
         source->open(ctx);
         return 1;
     }
@@ -253,7 +267,7 @@ uintptr_t source_next_buffer(uintptr_t source_ptr, uintptr_t context_ptr)
     auto* source = reinterpret_cast<adaptive_engine::SourceHandle*>(source_ptr);
     CPPTRACE_TRY
     {
-        FfiExecutionContext ctx(reinterpret_cast<void*>(context_ptr));
+        FfiExecutionContext ctx(reinterpret_cast<void*>(context_ptr), 0, 1);
         auto result = source->next_buffer(ctx);
         if (result.has_value())
         {
@@ -303,7 +317,7 @@ int32_t source_close(uintptr_t source_ptr, uintptr_t context_ptr)
     auto* source = reinterpret_cast<adaptive_engine::SourceHandle*>(source_ptr);
     CPPTRACE_TRY
     {
-        FfiExecutionContext ctx(reinterpret_cast<void*>(context_ptr));
+        FfiExecutionContext ctx(reinterpret_cast<void*>(context_ptr), 0, 1);
         source->close(ctx);
         return 1;
     }

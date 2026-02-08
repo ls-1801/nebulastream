@@ -22,10 +22,10 @@ mod common;
 use adaptive_engine::builder::PipelineGraphBuilder;
 use adaptive_engine::executor::ExecutorContext;
 use adaptive_engine::graph::GraphError;
-use adaptive_engine::pipeline::PipelineId;
 use adaptive_engine::pipeline::mocks::{
     FilterPipeline, MultibufferPipeline, OccasionalEmissionPipeline, StatefulPipeline,
 };
+use adaptive_engine::pipeline::PipelineId;
 use common::generate_test_buffers;
 
 // Helper function to create a test context

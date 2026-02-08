@@ -14,15 +14,17 @@
 
 //! Task-driven execution engine for stream processing pipelines.
 //!
-//! The executor provides a single execution thread that processes tasks from
+//! The executor provides one or more execution threads that process tasks from
 //! a thread-safe queue, orchestrating buffer flow through a dynamic pipeline DAG.
 //!
 //! # Threading Model
 //!
-//! - **Execution thread:** Single thread runs `Executor::run()` in a blocking loop
+//! - **Execution threads:** N threads run the worker loop in parallel, popping
+//!   tasks from the shared queue
 //! - **Source threads:** Multiple threads submit buffers via `ExecutorHandle::emit()`
 //! - **Deployment threads:** External threads deploy graphs via `ExecutorHandle::deploy_graph()`
-//! - **Synchronization:** Mutex for task queue, RwLock for graph, Atomic for reference counting
+//! - **Synchronization:** Mutex for task queue, RwLock for graph, Atomic for reference counting,
+//!   Condvar for efficient task notification
 //!
 //! # Simplified Lifecycle (v0.2.0+)
 //!
@@ -132,9 +134,9 @@ use crate::pipeline::{Buffer, PipelineId};
 use error::{EntityType, ExecutionError, TaskType};
 use metadata::PipelineMetadata;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::channel;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
 use task::Task;
 
@@ -260,6 +262,8 @@ pub struct ExecutorHandle {
     queries: Arc<RwLock<HashMap<QueryId, QueryState>>>,
     /// Flag set by shutdown() - executor thread pushes Shutdown task when last query completes.
     shutting_down: Arc<AtomicBool>,
+    /// Condvar to wake worker threads when new tasks are available.
+    task_available: Arc<Condvar>,
 }
 
 impl ExecutorHandle {
@@ -309,17 +313,20 @@ impl ExecutorHandle {
         }
 
         // Enqueue work task
-        let mut queue = self
-            .task_queue
-            .lock()
-            .map_err(|e| ExecutorError::TaskQueue(format!("Queue lock poisoned: {}", e)))?;
+        {
+            let mut queue = self
+                .task_queue
+                .lock()
+                .map_err(|e| ExecutorError::TaskQueue(format!("Queue lock poisoned: {}", e)))?;
 
-        queue.push(Task::WorkTask {
-            query_id: 0, // TODO: US-006 will add proper multi-query tracking
-            pipeline_id,
-            buffer,
-        });
+            queue.push(Task::WorkTask {
+                query_id: 0, // TODO: US-006 will add proper multi-query tracking
+                pipeline_id,
+                buffer,
+            });
+        }
 
+        self.task_available.notify_one();
         Ok(())
     }
 
@@ -363,12 +370,16 @@ impl ExecutorHandle {
         // Each query has isolated error state, so a new query can always be deployed
         // even if existing queries have errors.
 
-        let mut queue = self
-            .task_queue
-            .lock()
-            .map_err(|e| ExecutorError::TaskQueue(format!("Queue lock poisoned: {}", e)))?;
+        {
+            let mut queue = self
+                .task_queue
+                .lock()
+                .map_err(|e| ExecutorError::TaskQueue(format!("Queue lock poisoned: {}", e)))?;
 
-        queue.push(Task::DeployGraph { graph, query_id });
+            queue.push(Task::DeployGraph { graph, query_id });
+        }
+
+        self.task_available.notify_all();
         Ok(())
     }
 
@@ -408,16 +419,20 @@ impl ExecutorHandle {
         // Note: Per-query error checking is done at dequeue time (filter-on-dequeue pattern).
         // EOS signals are still enqueued even if query has errors, to ensure proper cleanup.
 
-        let mut queue = self
-            .task_queue
-            .lock()
-            .map_err(|e| ExecutorError::TaskQueue(format!("Queue lock poisoned: {}", e)))?;
+        {
+            let mut queue = self
+                .task_queue
+                .lock()
+                .map_err(|e| ExecutorError::TaskQueue(format!("Queue lock poisoned: {}", e)))?;
 
-        queue.push(Task::EndOfStream {
-            query_id: 0, // TODO: US-006 will add proper multi-query tracking
-            source_id,
-            pipeline_id,
-        });
+            queue.push(Task::EndOfStream {
+                query_id: 0, // TODO: US-006 will add proper multi-query tracking
+                source_id,
+                pipeline_id,
+            });
+        }
+
+        self.task_available.notify_one();
         Ok(())
     }
 
@@ -492,18 +507,21 @@ impl ExecutorHandle {
         drop(queries);
 
         // Get task queue lock
-        let mut queue = self
-            .task_queue
-            .lock()
-            .map_err(|e| ExecutorError::TaskQueue(format!("Queue lock poisoned: {}", e)))?;
+        {
+            let mut queue = self
+                .task_queue
+                .lock()
+                .map_err(|e| ExecutorError::TaskQueue(format!("Queue lock poisoned: {}", e)))?;
 
-        // Enqueue StopPipelineTask for each source to initiate cascading shutdown
-        for source_id in source_ids {
-            queue.push(Task::StopPipelineTask {
-                pipeline_id: source_id,
-            });
+            // Enqueue StopPipelineTask for each source to initiate cascading shutdown
+            for source_id in source_ids {
+                queue.push(Task::StopPipelineTask {
+                    pipeline_id: source_id,
+                });
+            }
         }
 
+        self.task_available.notify_all();
         Ok(true)
     }
 
@@ -547,413 +565,83 @@ impl ExecutorHandle {
                 .collect()
         };
 
-        let mut queue = self
-            .task_queue
-            .lock()
-            .map_err(|e| ExecutorError::TaskQueue(format!("Queue lock poisoned: {}", e)))?;
+        {
+            let mut queue = self
+                .task_queue
+                .lock()
+                .map_err(|e| ExecutorError::TaskQueue(format!("Queue lock poisoned: {}", e)))?;
 
-        if all_sources.is_empty() {
-            // No active queries - enqueue Shutdown immediately
-            queue.push(Task::Shutdown);
-        } else {
-            // Enqueue StopPipelineTask for each source
-            // Shutdown will be enqueued when the last pipeline stops
-            for source_id in all_sources {
-                queue.push(Task::StopPipelineTask {
-                    pipeline_id: source_id,
-                });
+            if all_sources.is_empty() {
+                // No active queries - enqueue Shutdown immediately
+                queue.push(Task::Shutdown);
+            } else {
+                // Enqueue StopPipelineTask for each source
+                // Shutdown will be enqueued when the last pipeline stops
+                for source_id in all_sources {
+                    queue.push(Task::StopPipelineTask {
+                        pipeline_id: source_id,
+                    });
+                }
             }
         }
 
+        self.task_available.notify_all();
         Ok(())
     }
 }
 
-/// Single-threaded execution engine.
+/// Shared state accessible by all worker threads.
 ///
-/// `Executor` runs on a dedicated thread and processes tasks from a thread-safe
-/// queue, orchestrating buffer flow through the pipeline graph.
-///
-/// # DelayedTaskSubmitter Integration
-///
-/// The executor owns a `DelayedTaskSubmitter` that handles `repeat_task()` calls.
-/// When a pipeline calls `context.repeat_task(delay_ms)`, the task is sent to the
-/// submitter thread which sleeps for the delay and then pushes the task back into
-/// the executor's task queue. On shutdown, the executor signals the submitter to
-/// stop and joins its thread.
-///
-/// # Statistics Channel
-///
-/// The executor accepts an optional `StatisticsSender` for emitting execution
-/// lifecycle events. If no sender is provided (or a no-op sender is used),
-/// events are silently discarded with zero overhead.
-pub struct Executor {
+/// Contains all `Arc`-wrapped state and all task-execution methods.
+/// Methods take `&self` and a `worker_id` parameter.
+pub(crate) struct ExecutorShared {
     /// Multi-query graph storage: maps QueryId to QueryState.
     queries: Arc<RwLock<HashMap<QueryId, QueryState>>>,
     task_queue: Arc<Mutex<Box<dyn TaskQueue>>>,
     metadata: Arc<Mutex<HashMap<PipelineId, Arc<PipelineMetadata>>>>,
-    /// The delayed task submitter for handling repeat_task() calls
-    delayed_submitter: Option<DelayedTaskSubmitter>,
+    /// Handle for the delayed task submitter (for repeat_task re-queueing)
+    delayed_submitter_handle: Option<DelayedTaskSubmitterHandle>,
     /// Statistics event sender for observability
     stats_sender: stats::StatisticsSender,
     /// Counter for generating unique task IDs
-    next_task_id: std::sync::atomic::AtomicU64,
+    next_task_id: AtomicU64,
     /// Flag set by shutdown() - executor thread pushes Shutdown task when last query completes.
     shutting_down: Arc<AtomicBool>,
+    /// Condvar to wake worker threads when new tasks are available.
+    task_available: Arc<Condvar>,
+    /// Number of worker threads.
+    worker_count: usize,
+    /// Flag set when a worker processes the Shutdown task. Other workers
+    /// use this to exit their loops.
+    shutdown_complete: AtomicBool,
 }
 
-impl Executor {
-    /// Create a new executor with the default FIFO queue.
+impl ExecutorShared {
+    /// Pop a task from the queue, blocking on the condvar if empty.
     ///
-    /// The executor starts with no graph deployed. Use `deploy_graph()` via
-    /// the handle to deploy a graph before emitting buffers.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::executor::Executor;
-    ///
-    /// let executor = Executor::new();
-    /// ```
-    pub fn new() -> Self {
-        Self::with_queue(FifoQueue::new())
-    }
-
-    /// Create a new executor with a custom task queue implementation.
-    ///
-    /// This allows using different queue strategies for testing or
-    /// performance tuning.
-    ///
-    /// # Arguments
-    ///
-    /// * `queue` - The task queue implementation to use
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::executor::{Executor, RandomQueue};
-    ///
-    /// // Use random queue for stress testing
-    /// let executor = Executor::with_queue(RandomQueue::new());
-    /// ```
-    pub fn with_queue<Q: TaskQueue + 'static>(queue: Q) -> Self {
-        Self::with_queue_and_stats(queue, stats::StatisticsSender::noop())
-    }
-
-    /// Create a new executor with a custom task queue and statistics sender.
-    ///
-    /// This allows using different queue strategies and collecting execution
-    /// statistics for testing or monitoring.
-    ///
-    /// # Arguments
-    ///
-    /// * `queue` - The task queue implementation to use
-    /// * `stats_sender` - The statistics event sender for observability
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::executor::{Executor, FifoQueue, StatisticsSender, StatisticsEvent};
-    /// use std::sync::mpsc;
-    ///
-    /// // Create channel for statistics
-    /// let (tx, rx) = mpsc::channel::<StatisticsEvent>();
-    /// let sender = StatisticsSender::new(tx);
-    ///
-    /// // Create executor with statistics
-    /// let executor = Executor::with_queue_and_stats(FifoQueue::new(), sender);
-    /// ```
-    pub fn with_queue_and_stats<Q: TaskQueue + 'static>(
-        queue: Q,
-        stats_sender: stats::StatisticsSender,
-    ) -> Self {
-        let task_queue: Arc<Mutex<Box<dyn TaskQueue>>> = Arc::new(Mutex::new(Box::new(queue)));
-
-        // Create the DelayedTaskSubmitter with access to the task queue
-        let delayed_submitter = DelayedTaskSubmitter::new(Arc::clone(&task_queue));
-
-        Self {
-            queries: Arc::new(RwLock::new(HashMap::new())),
-            task_queue,
-            metadata: Arc::new(Mutex::new(HashMap::new())),
-            delayed_submitter: Some(delayed_submitter),
-            stats_sender,
-            next_task_id: std::sync::atomic::AtomicU64::new(1),
-            shutting_down: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    /// Get a cloneable handle for submitting tasks.
-    ///
-    /// The handle can be cloned and shared across threads to submit work
-    /// from multiple source threads.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::executor::Executor;
-    ///
-    /// let mut executor = Executor::new();
-    /// let handle = executor.get_handle();
-    /// let handle_clone = handle.clone();
-    /// ```
-    pub fn get_handle(&self) -> ExecutorHandle {
-        ExecutorHandle {
-            task_queue: Arc::clone(&self.task_queue),
-            metadata: Arc::clone(&self.metadata),
-            queries: Arc::clone(&self.queries),
-            shutting_down: Arc::clone(&self.shutting_down),
-        }
-    }
-
-    /// Run the execution loop (blocking).
-    ///
-    /// This method runs on the execution thread and processes tasks until
-    /// a `Shutdown` task is received. It returns execution statistics when
-    /// the shutdown is complete.
-    ///
-    /// # Returns
-    ///
-    /// Execution statistics tracking buffers processed, pipelines started/stopped, etc.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use adaptive_engine::executor::Executor;
-    /// use std::thread;
-    ///
-    /// let mut executor = Executor::new();
-    /// let handle = executor.get_handle();
-    ///
-    /// let exec_thread = thread::spawn(move || {
-    ///     executor.run()
-    /// });
-    ///
-    /// // Use handle to submit work...
-    /// handle.shutdown().unwrap();
-    /// let stats = exec_thread.join().unwrap();
-    /// ```
-    pub fn run(mut self) -> ExecutionStats {
-        let mut stats = ExecutionStats::new();
-
+    /// Returns `None` only when `shutdown_complete` is set and the queue is empty.
+    fn pop_task(&self) -> Option<Task> {
+        let mut queue = self.task_queue.lock().unwrap();
         loop {
-            // Note: Per-query error checking is done at task processing time.
-            // Each query has isolated error state, so errors in one query
-            // don't stop other queries from running. Tasks for errored queries
-            // are skipped (US-009 task filtering).
-
-            // Pop a task from the queue
-            let task = {
-                let mut queue = self.task_queue.lock().unwrap();
-                queue.pop()
-            };
-
-            // If no task, sleep briefly and continue
-            let Some(task) = task else {
-                std::thread::sleep(Duration::from_millis(1));
-                continue;
-            };
-
-            // Process the task
-            match task {
-                Task::WorkTask {
-                    query_id,
-                    pipeline_id,
-                    buffer,
-                } => {
-                    // Filter-on-dequeue: skip tasks for stopped/removed/stopping queries
-                    // query_id 0 is backward compatibility - always process
-                    if query_id != 0 && !self.query_accepts_work(query_id) {
-                        stats.tasks_skipped += 1;
-                        // Must decrement pending counter even for skipped tasks.
-                        // The counter was incremented when the task was enqueued
-                        // (via enqueue_work_task/route_buffers). Without this,
-                        // pending stays > 0 and the stop cascade hangs waiting
-                        // for should_terminate() && pending == 0.
-                        self.decrement_ref_and_check_stop(&pipeline_id, &mut stats);
-                        continue;
-                    }
-                    self.execute_work_task(query_id, &pipeline_id, buffer, &mut stats);
-                    stats.tasks_executed += 1;
-                }
-                Task::DeployGraph { graph, query_id } => {
-                    self.execute_deploy_graph(graph, query_id, &mut stats);
-                    stats.tasks_executed += 1;
-                }
-                Task::StartSource {
-                    query_id,
-                    source_id,
-                } => {
-                    // Filter-on-dequeue: skip tasks for stopped/removed queries
-                    // query_id 0 is backward compatibility - always process
-                    if query_id != 0 && !self.query_exists(query_id) {
-                        stats.tasks_skipped += 1;
-                        continue;
-                    }
-                    self.execute_start_source_task(&source_id, &mut stats);
-                    stats.tasks_executed += 1;
-                }
-                Task::EndOfStream {
-                    query_id,
-                    source_id,
-                    pipeline_id,
-                } => {
-                    // Filter-on-dequeue: skip tasks for stopped/removed queries
-                    // query_id 0 is backward compatibility - always process
-                    if query_id != 0 && !self.query_exists(query_id) {
-                        stats.tasks_skipped += 1;
-                        continue;
-                    }
-                    self.execute_eos_task(&source_id, &pipeline_id, &mut stats);
-                    stats.tasks_executed += 1;
-                }
-                Task::StopPipelineTask { pipeline_id } => {
-                    self.execute_stop_task(&pipeline_id, &mut stats);
-                    stats.tasks_executed += 1;
-                }
-                Task::SourceError {
-                    query_id,
-                    source_id,
-                    error,
-                } => {
-                    self.execute_source_error_task(query_id, &source_id, &error, &mut stats);
-                    stats.tasks_executed += 1;
-                }
-                Task::Shutdown => {
-                    stats.tasks_executed += 1;
-                    // Stop all active pipelines
-                    self.stop_all_pipelines(&mut stats);
-                    break;
-                }
+            if let Some(task) = queue.pop() {
+                return Some(task);
             }
+            // If shutdown has been fully processed by another worker, exit
+            if self.shutdown_complete.load(Ordering::SeqCst) {
+                return None;
+            }
+            let (guard, _timeout) = self
+                .task_available
+                .wait_timeout(queue, Duration::from_millis(100))
+                .unwrap();
+            queue = guard;
         }
-
-        // Shutdown the DelayedTaskSubmitter and wait for its thread to finish
-        if let Some(submitter) = self.delayed_submitter.take() {
-            submitter.shutdown();
-        }
-
-        // Aggregate errors from all queries into stats
-        {
-            let queries = self.queries.read().unwrap();
-            for query_state in queries.values() {
-                stats.errors.extend(query_state.error_state.get_errors());
-            }
-        }
-
-        // Clear all query state to release pipeline/source resources.
-        // This is critical for FFI: dropping CppPipelineStage/CppSourceHandle
-        // calls C++ destructors (stage_destroy/source_destroy) to free C++ objects.
-        {
-            let mut queries = self.queries.write().unwrap();
-            queries.clear();
-        }
-
-        stats
-    }
-
-    /// Execute a single task (for testing).
-    ///
-    /// Pops one task from the queue and executes it. Returns true if a task
-    /// was executed, false if the queue was empty.
-    ///
-    /// This is useful for step-through testing without spawning a thread.
-    ///
-    /// # Returns
-    ///
-    /// True if a task was executed, false if the queue was empty.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::executor::Executor;
-    ///
-    /// let mut executor = Executor::new();
-    /// let handle = executor.get_handle();
-    ///
-    /// // Submit a task
-    /// handle.shutdown().unwrap();
-    ///
-    /// // Execute it
-    /// let executed = executor.run_one();
-    /// assert!(executed);
-    /// ```
-    pub fn run_one(&mut self) -> bool {
-        let task = {
-            let mut queue = self.task_queue.lock().unwrap();
-            queue.pop()
-        };
-
-        let Some(task) = task else {
-            return false;
-        };
-
-        let mut stats = ExecutionStats::new();
-
-        match task {
-            Task::WorkTask {
-                query_id,
-                pipeline_id,
-                buffer,
-            } => {
-                // Filter-on-dequeue: skip tasks for stopped/removed/stopping queries
-                // query_id 0 is backward compatibility - always process
-                if query_id != 0 && !self.query_accepts_work(query_id) {
-                    // Must decrement pending counter even for skipped tasks
-                    // (see run() loop for detailed explanation).
-                    self.decrement_ref_and_check_stop(&pipeline_id, &mut stats);
-                    return true; // Task was "executed" (skipped)
-                }
-                self.execute_work_task(query_id, &pipeline_id, buffer, &mut stats);
-            }
-            Task::DeployGraph { graph, query_id } => {
-                self.execute_deploy_graph(graph, query_id, &mut stats);
-            }
-            Task::StartSource {
-                query_id,
-                source_id,
-            } => {
-                // Filter-on-dequeue: skip tasks for stopped/removed queries
-                // query_id 0 is backward compatibility - always process
-                if query_id != 0 && !self.query_exists(query_id) {
-                    return true; // Task was "executed" (skipped)
-                }
-                self.execute_start_source_task(&source_id, &mut stats);
-            }
-            Task::EndOfStream {
-                query_id,
-                source_id,
-                pipeline_id,
-            } => {
-                // Filter-on-dequeue: skip tasks for stopped/removed queries
-                // query_id 0 is backward compatibility - always process
-                if query_id != 0 && !self.query_exists(query_id) {
-                    return true; // Task was "executed" (skipped)
-                }
-                self.execute_eos_task(&source_id, &pipeline_id, &mut stats);
-            }
-            Task::StopPipelineTask { pipeline_id } => {
-                self.execute_stop_task(&pipeline_id, &mut stats);
-            }
-            Task::SourceError {
-                query_id,
-                source_id,
-                error,
-            } => {
-                self.execute_source_error_task(query_id, &source_id, &error, &mut stats);
-            }
-            Task::Shutdown => {
-                // Stop all active pipelines
-                self.stop_all_pipelines(&mut stats);
-            }
-        }
-
-        true
     }
 
     /// Execute a work task (pipeline execution with buffer).
     fn execute_work_task(
-        &mut self,
+        &self,
+        worker_id: usize,
         query_id: QueryId,
         pipeline_id: &PipelineId,
         buffer: Buffer,
@@ -1024,8 +712,8 @@ impl Executor {
         let context = context::ExecutorContext::with_query_id(
             pipeline_id.clone(),
             query_id,
-            0, // Single-threaded executor: worker_id = 0
-            1, // Single-threaded executor: worker_count = 1
+            worker_id,
+            self.worker_count,
             emit_tx,
         );
 
@@ -1033,8 +721,12 @@ impl Executor {
         let task_id = self.next_task_id.fetch_add(1, Ordering::SeqCst);
 
         // Emit TaskExecutionStart event
-        self.stats_sender
-            .task_execution_start(0, query_id, pipeline_id.clone(), task_id);
+        self.stats_sender.task_execution_start(
+            worker_id as u64,
+            query_id,
+            pipeline_id.clone(),
+            task_id,
+        );
 
         // Execute the pipeline with context
         match pipeline.execute(buffer, &context) {
@@ -1043,7 +735,7 @@ impl Executor {
 
                 // Emit TaskExecutionComplete event
                 self.stats_sender.task_execution_complete(
-                    0,
+                    worker_id as u64,
                     query_id,
                     pipeline_id.clone(),
                     task_id,
@@ -1070,12 +762,15 @@ impl Executor {
 
                     if delay_ms == 0 {
                         // Immediate re-queue
-                        let mut queue = self.task_queue.lock().unwrap();
-                        queue.push(repeat_task);
+                        {
+                            let mut queue = self.task_queue.lock().unwrap();
+                            queue.push(repeat_task);
+                        }
+                        self.task_available.notify_one();
                     } else {
                         // Delayed re-queue via DelayedTaskSubmitter
-                        if let Some(ref submitter) = self.delayed_submitter {
-                            let _ = submitter.get_handle().submit_delayed(repeat_task, delay_ms);
+                        if let Some(ref handle) = self.delayed_submitter_handle {
+                            let _ = handle.submit_delayed(repeat_task, delay_ms);
                         }
                     }
                 }
@@ -1106,7 +801,7 @@ impl Executor {
             Err(e) => {
                 // Emit TaskExecutionComplete event (even on failure)
                 self.stats_sender.task_execution_complete(
-                    0,
+                    worker_id as u64,
                     query_id,
                     pipeline_id.clone(),
                     task_id,
@@ -1240,19 +935,23 @@ impl Executor {
         }
 
         // Enqueue the task
-        let mut queue = self.task_queue.lock().unwrap();
-        queue.push(Task::WorkTask {
-            query_id,
-            pipeline_id,
-            buffer,
-        });
+        {
+            let mut queue = self.task_queue.lock().unwrap();
+            queue.push(Task::WorkTask {
+                query_id,
+                pipeline_id,
+                buffer,
+            });
+        }
+        self.task_available.notify_one();
     }
 
     /// Execute a deploy graph task with automatic pipeline initialization.
     ///
     /// Adds the graph to the queries HashMap and returns the assigned QueryId.
     fn execute_deploy_graph(
-        &mut self,
+        &self,
+        worker_id: usize,
         graph: PipelineGraph,
         provided_query_id: QueryId,
         stats: &mut ExecutionStats,
@@ -1275,7 +974,7 @@ impl Executor {
         }
 
         // Emit QueryStart event
-        self.stats_sender.query_start(0, query_id);
+        self.stats_sender.query_start(worker_id as u64, query_id);
 
         // Auto-start all pipelines in the new graph
         let mut setup_failed = false;
@@ -1301,8 +1000,12 @@ impl Executor {
                     if let Some(pipeline) = graph.get_pipeline(pipeline_id) {
                         // Create context for setup
                         let (emit_tx, _emit_rx) = channel();
-                        let context =
-                            context::ExecutorContext::new(pipeline_id.clone(), 0, 1, emit_tx);
+                        let context = context::ExecutorContext::new(
+                            pipeline_id.clone(),
+                            worker_id,
+                            self.worker_count,
+                            emit_tx,
+                        );
 
                         match pipeline.setup(&context) {
                             Ok(()) => {
@@ -1314,8 +1017,11 @@ impl Executor {
                                 stats.pipelines_started += 1;
 
                                 // Emit PipelineStart event
-                                self.stats_sender
-                                    .pipeline_start(0, query_id, pipeline_id.clone());
+                                self.stats_sender.pipeline_start(
+                                    worker_id as u64,
+                                    query_id,
+                                    pipeline_id.clone(),
+                                );
                             }
                             Err(e) => {
                                 // Record setup failure in per-query error state
@@ -1356,7 +1062,7 @@ impl Executor {
 
                     if source_ids.is_empty() {
                         // No sources - query is immediately "running"
-                        self.stats_sender.query_running(0, query_id);
+                        self.stats_sender.query_running(worker_id as u64, query_id);
                     }
 
                     for source_id in source_ids {
@@ -1366,6 +1072,7 @@ impl Executor {
                         };
                         self.task_queue.lock().unwrap().push(task);
                     }
+                    self.task_available.notify_all();
                 }
             }
         }
@@ -1379,7 +1086,12 @@ impl Executor {
                     for pid in successfully_setup.iter().rev() {
                         if let Some(pipeline) = query_state.graph.get_pipeline(pid) {
                             let (emit_tx, _emit_rx) = channel();
-                            let context = context::ExecutorContext::new(pid.clone(), 0, 1, emit_tx);
+                            let context = context::ExecutorContext::new(
+                                pid.clone(),
+                                worker_id,
+                                self.worker_count,
+                                emit_tx,
+                            );
                             if let Err(e) = pipeline.teardown(&context) {
                                 eprintln!("Error during teardown for {}: {}", pid, e);
                             }
@@ -1396,7 +1108,12 @@ impl Executor {
     }
 
     /// Execute a stop pipeline task.
-    fn execute_stop_task(&mut self, pipeline_id: &PipelineId, stats: &mut ExecutionStats) {
+    fn execute_stop_task(
+        &self,
+        worker_id: usize,
+        pipeline_id: &PipelineId,
+        stats: &mut ExecutionStats,
+    ) {
         // 1. Get successors, query_id, and check setup status BEFORE teardown
         let (successors, should_teardown, query_id) = {
             let queries_guard = self.queries.read().unwrap();
@@ -1446,7 +1163,12 @@ impl Executor {
                 if let Some(pipeline) = graph.get_pipeline(pipeline_id) {
                     // Create context for flush
                     let (emit_tx, emit_rx) = channel();
-                    let context = context::ExecutorContext::new(pipeline_id.clone(), 0, 1, emit_tx);
+                    let context = context::ExecutorContext::new(
+                        pipeline_id.clone(),
+                        worker_id,
+                        self.worker_count,
+                        emit_tx,
+                    );
 
                     match pipeline.flush(&context) {
                         Ok(returned_buffers) => {
@@ -1569,8 +1291,12 @@ impl Executor {
                     loop {
                         // Create context for teardown
                         let (emit_tx, _emit_rx) = channel();
-                        let context =
-                            context::ExecutorContext::new(pipeline_id.clone(), 0, 1, emit_tx);
+                        let context = context::ExecutorContext::new(
+                            pipeline_id.clone(),
+                            worker_id,
+                            self.worker_count,
+                            emit_tx,
+                        );
 
                         match pipeline.teardown(&context) {
                             Ok(()) => {
@@ -1623,16 +1349,20 @@ impl Executor {
 
         // 5. Emit PipelineStop event
         self.stats_sender
-            .pipeline_stop(0, query_id, pipeline_id.clone());
+            .pipeline_stop(worker_id as u64, query_id, pipeline_id.clone());
 
         // 6. Enqueue EndOfStream to all successors
-        for successor_id in successors {
-            self.task_queue.lock().unwrap().push(Task::EndOfStream {
-                query_id,
-                source_id: pipeline_id.clone(),
-                pipeline_id: successor_id,
-            });
+        {
+            let mut queue = self.task_queue.lock().unwrap();
+            for successor_id in successors {
+                queue.push(Task::EndOfStream {
+                    query_id,
+                    source_id: pipeline_id.clone(),
+                    pipeline_id: successor_id,
+                });
+            }
         }
+        self.task_available.notify_all();
 
         // 7. Remove metadata
         self.metadata.lock().unwrap().remove(pipeline_id);
@@ -1663,21 +1393,29 @@ impl Executor {
             // thread's own close(), triggering a crash in NesSourceHandle::close()
             // which uses a non-atomic bool guard.
 
-            // Emit QueryStop event
-            self.stats_sender.query_stop(0, query_id);
-            // Emit QueryTerminated event
-            self.stats_sender.query_terminated(0, query_id);
-
-            // Remove QueryState from the HashMap
+            // Remove QueryState from the HashMap.
+            // With multiple workers, two workers may process the last two pipelines
+            // concurrently and both observe all_query_pipelines_stopped == true.
+            // Use the write lock + remove return value to ensure only one worker
+            // performs the query cleanup and emits stats events.
             let mut queries_guard = self.queries.write().unwrap();
-            queries_guard.remove(&query_id);
+            let removed = queries_guard.remove(&query_id);
 
-            // If engine is shutting down and all queries are done, push Shutdown
-            if self.shutting_down.load(Ordering::SeqCst)
-                && queries_guard.is_empty()
-                && self.metadata.lock().unwrap().is_empty()
-            {
-                self.task_queue.lock().unwrap().push(Task::Shutdown);
+            if removed.is_some() {
+                // Emit QueryStop event
+                self.stats_sender.query_stop(worker_id as u64, query_id);
+                // Emit QueryTerminated event
+                self.stats_sender
+                    .query_terminated(worker_id as u64, query_id);
+
+                // If engine is shutting down and all queries are done, push Shutdown
+                if self.shutting_down.load(Ordering::SeqCst)
+                    && queries_guard.is_empty()
+                    && self.metadata.lock().unwrap().is_empty()
+                {
+                    self.task_queue.lock().unwrap().push(Task::Shutdown);
+                    self.task_available.notify_all();
+                }
             }
         }
     }
@@ -1687,7 +1425,12 @@ impl Executor {
     /// This method is called to start a source node after all pipelines have
     /// been set up. It creates a SourceEmitHandle for the source and calls
     /// the source's start() method.
-    fn execute_start_source_task(&mut self, source_id: &PipelineId, stats: &mut ExecutionStats) {
+    fn execute_start_source_task(
+        &self,
+        worker_id: usize,
+        source_id: &PipelineId,
+        stats: &mut ExecutionStats,
+    ) {
         use crate::source::SourceEmitHandle;
 
         // Get the source pipeline and its query state from any query graph
@@ -1727,6 +1470,7 @@ impl Executor {
             query_id,
             self.task_queue.clone(),
             stop_flag,
+            Arc::clone(&self.task_available),
         );
 
         // Start the source
@@ -1742,7 +1486,7 @@ impl Executor {
                 let expected = query_state.expected_sources.load(Ordering::SeqCst);
                 if expected > 0 && prev + 1 >= expected {
                     // All sources started - query is now fully operational
-                    self.stats_sender.query_running(0, query_id);
+                    self.stats_sender.query_running(worker_id as u64, query_id);
                 }
             }
             Err(e) => {
@@ -1775,7 +1519,7 @@ impl Executor {
     /// Called when a source encounters an error (e.g., C++ source throws during
     /// next_buffer). Records the error and terminates the query.
     fn execute_source_error_task(
-        &mut self,
+        &self,
         query_id: QueryId,
         source_id: &PipelineId,
         error: &str,
@@ -1824,77 +1568,82 @@ impl Executor {
     }
 
     /// Execute an end-of-stream task.
+    ///
+    /// Performs EOS counting, termination request, and stop-check under a single
+    /// metadata lock to prevent TOCTOU races with concurrent decrements.
     fn execute_eos_task(
-        &mut self,
+        &self,
         _source_id: &PipelineId,
         pipeline_id: &PipelineId,
         _stats: &mut ExecutionStats,
     ) {
-        let metadata = self.metadata.lock().unwrap();
+        let should_stop = {
+            let metadata = self.metadata.lock().unwrap();
 
-        if let Some(meta) = metadata.get(pipeline_id) {
-            // Increment EOS counter
-            let eos_count = meta.increment_eos();
-            let expected = meta.get_expected_sources();
+            if let Some(meta) = metadata.get(pipeline_id) {
+                // Increment EOS counter
+                let eos_count = meta.increment_eos();
+                let expected = meta.get_expected_sources();
 
-            // Check if all sources have finished
-            if expected > 0 && eos_count >= expected {
-                // All sources finished - mark for termination
-                meta.request_termination();
-                drop(metadata);
-
-                // Check if ready to stop (all sources done + no pending work)
-                let should_stop = {
-                    let metadata = self.metadata.lock().unwrap();
-                    metadata
-                        .get(pipeline_id)
-                        .map(|m| m.should_terminate() && m.get_pending() == 0)
-                        .unwrap_or(false)
-                };
-
-                if should_stop {
-                    self.task_queue
-                        .lock()
-                        .unwrap()
-                        .push(Task::StopPipelineTask {
-                            pipeline_id: pipeline_id.clone(),
-                        });
+                // Check if all sources have finished
+                if expected > 0 && eos_count >= expected {
+                    // All sources finished - mark for termination and check if ready
+                    meta.request_termination();
+                    meta.should_terminate()
+                        && meta.get_pending() == 0
+                        && !meta.stop_task_enqueued.swap(true, Ordering::SeqCst)
+                } else {
+                    false
                 }
+            } else {
+                eprintln!(
+                    "Warning: End-of-stream for pipeline {} that doesn't exist",
+                    pipeline_id
+                );
+                false
             }
-        } else {
-            eprintln!(
-                "Warning: End-of-stream for pipeline {} that doesn't exist",
-                pipeline_id
-            );
+        };
+
+        if should_stop {
+            {
+                self.task_queue
+                    .lock()
+                    .unwrap()
+                    .push(Task::StopPipelineTask {
+                        pipeline_id: pipeline_id.clone(),
+                    });
+            }
+            self.task_available.notify_one();
         }
     }
 
     /// Decrement reference count and check if pipeline should be stopped.
+    ///
+    /// Performs both the decrement and the stop-check under a single metadata lock
+    /// to prevent TOCTOU races with concurrent EOS processing or other decrements.
     fn decrement_ref_and_check_stop(&self, pipeline_id: &PipelineId, _stats: &mut ExecutionStats) {
-        let metadata = self.metadata.lock().unwrap();
-
-        if let Some(meta) = metadata.get(pipeline_id) {
-            meta.decrement_pending();
-        }
-
-        drop(metadata);
-
-        // Check if ready to stop
         let should_stop = {
             let metadata = self.metadata.lock().unwrap();
-            metadata
-                .get(pipeline_id)
-                .map(|m| m.should_terminate() && m.get_pending() == 0)
-                .unwrap_or(false)
+            if let Some(meta) = metadata.get(pipeline_id) {
+                meta.decrement_pending();
+                meta.should_terminate()
+                    && meta.get_pending() == 0
+                    && !meta.stop_task_enqueued.swap(true, Ordering::SeqCst)
+            } else {
+                false
+            }
         };
 
         if should_stop {
-            self.task_queue
-                .lock()
-                .unwrap()
-                .push(Task::StopPipelineTask {
-                    pipeline_id: pipeline_id.clone(),
-                });
+            {
+                self.task_queue
+                    .lock()
+                    .unwrap()
+                    .push(Task::StopPipelineTask {
+                        pipeline_id: pipeline_id.clone(),
+                    });
+            }
+            self.task_available.notify_one();
         }
     }
 
@@ -1902,14 +1651,6 @@ impl Executor {
     ///
     /// Used for filter-on-dequeue pattern: tasks for stopped/removed queries
     /// are skipped when dequeued.
-    ///
-    /// # Arguments
-    ///
-    /// * `query_id` - The ID of the query to check
-    ///
-    /// # Returns
-    ///
-    /// `true` if the query exists, `false` otherwise.
     fn query_exists(&self, query_id: QueryId) -> bool {
         let queries = self.queries.read().unwrap();
         queries.contains_key(&query_id)
@@ -1938,7 +1679,7 @@ impl Executor {
     ///
     /// CRITICAL: This does NOT call flush()/stop()/teardown() on any pipeline.
     /// On error, pipelines are just dropped (destroyed).
-    fn terminate_query(&mut self, query_id: QueryId, stats: &mut ExecutionStats) {
+    fn terminate_query(&self, query_id: QueryId, stats: &mut ExecutionStats) {
         // Collect errors and source IDs from the query before modifying state
         let (pipeline_ids_to_remove, errors, source_ids) = {
             let queries = self.queries.read().unwrap();
@@ -2031,6 +1772,7 @@ impl Executor {
             let metadata_empty = self.metadata.lock().unwrap().is_empty();
             if queries_empty && metadata_empty {
                 self.task_queue.lock().unwrap().push(Task::Shutdown);
+                self.task_available.notify_all();
             }
         }
     }
@@ -2085,6 +1827,469 @@ impl Executor {
         let mut metadata = self.metadata.lock().unwrap();
         stats.pipelines_stopped += pipeline_ids.len();
         metadata.clear();
+    }
+
+    /// Run the worker loop for a single worker thread.
+    ///
+    /// Pops tasks from the shared queue and dispatches to execute methods.
+    /// Returns when a Shutdown task is processed or `shutting_down` is set
+    /// and the queue is drained.
+    fn worker_loop(self: &Arc<Self>, worker_id: usize) -> ExecutionStats {
+        let mut stats = ExecutionStats::new();
+
+        loop {
+            // Check if another worker already processed Shutdown
+            if self.shutdown_complete.load(Ordering::SeqCst) {
+                break;
+            }
+
+            let task = self.pop_task();
+
+            // pop_task should always return Some, but guard against edge cases
+            let Some(task) = task else {
+                if self.shutdown_complete.load(Ordering::SeqCst) {
+                    break;
+                }
+                continue;
+            };
+
+            if matches!(task, Task::Shutdown) {
+                stats.tasks_executed += 1;
+                self.stop_all_pipelines(&mut stats);
+                // Signal other workers to exit
+                self.shutdown_complete.store(true, Ordering::SeqCst);
+                self.task_available.notify_all();
+                break;
+            }
+
+            self.dispatch_task(worker_id, task, &mut stats);
+        }
+
+        stats
+    }
+
+    /// Dispatch a single task to the appropriate handler.
+    fn dispatch_task(&self, worker_id: usize, task: Task, stats: &mut ExecutionStats) {
+        match task {
+            Task::WorkTask {
+                query_id,
+                pipeline_id,
+                buffer,
+            } => {
+                // Filter-on-dequeue: skip tasks for stopped/removed/stopping queries
+                // query_id 0 is backward compatibility - always process
+                if query_id != 0 && !self.query_accepts_work(query_id) {
+                    stats.tasks_skipped += 1;
+                    self.decrement_ref_and_check_stop(&pipeline_id, stats);
+                    return;
+                }
+                self.execute_work_task(worker_id, query_id, &pipeline_id, buffer, stats);
+                stats.tasks_executed += 1;
+            }
+            Task::DeployGraph { graph, query_id } => {
+                self.execute_deploy_graph(worker_id, graph, query_id, stats);
+                stats.tasks_executed += 1;
+            }
+            Task::StartSource {
+                query_id,
+                source_id,
+            } => {
+                // Filter-on-dequeue: skip tasks for stopped/removed queries
+                // query_id 0 is backward compatibility - always process
+                if query_id != 0 && !self.query_exists(query_id) {
+                    stats.tasks_skipped += 1;
+                    return;
+                }
+                self.execute_start_source_task(worker_id, &source_id, stats);
+                stats.tasks_executed += 1;
+            }
+            Task::EndOfStream {
+                query_id,
+                source_id,
+                pipeline_id,
+            } => {
+                // Filter-on-dequeue: skip tasks for stopped/removed queries
+                // query_id 0 is backward compatibility - always process
+                if query_id != 0 && !self.query_exists(query_id) {
+                    stats.tasks_skipped += 1;
+                    return;
+                }
+                self.execute_eos_task(&source_id, &pipeline_id, stats);
+                stats.tasks_executed += 1;
+            }
+            Task::StopPipelineTask { pipeline_id } => {
+                self.execute_stop_task(worker_id, &pipeline_id, stats);
+                stats.tasks_executed += 1;
+            }
+            Task::SourceError {
+                query_id,
+                source_id,
+                error,
+            } => {
+                self.execute_source_error_task(query_id, &source_id, &error, stats);
+                stats.tasks_executed += 1;
+            }
+            Task::Shutdown => {
+                // Handled in worker_loop before dispatch
+                unreachable!("Shutdown should be handled before dispatch_task");
+            }
+        }
+    }
+}
+
+/// Execution engine with configurable worker thread count.
+///
+/// `Executor` manages shared state and worker threads. When `run()` is called,
+/// it spawns N-1 additional worker threads (for a total of N workers) that
+/// all process tasks from the shared queue.
+///
+/// # DelayedTaskSubmitter Integration
+///
+/// The executor owns a `DelayedTaskSubmitter` that handles `repeat_task()` calls.
+/// When a pipeline calls `context.repeat_task(delay_ms)`, the task is sent to the
+/// submitter thread which sleeps for the delay and then pushes the task back into
+/// the executor's task queue. On shutdown, the executor signals the submitter to
+/// stop and joins its thread.
+///
+/// # Statistics Channel
+///
+/// The executor accepts an optional `StatisticsSender` for emitting execution
+/// lifecycle events. If no sender is provided (or a no-op sender is used),
+/// events are silently discarded with zero overhead.
+pub struct Executor {
+    /// Shared state accessible by all worker threads.
+    shared: Arc<ExecutorShared>,
+    /// The delayed task submitter for handling repeat_task() calls (owns thread lifecycle)
+    delayed_submitter: Option<DelayedTaskSubmitter>,
+    /// Number of worker threads.
+    worker_count: usize,
+}
+
+impl Executor {
+    /// Create a new executor with the default FIFO queue and 1 worker thread.
+    ///
+    /// The executor starts with no graph deployed. Use `deploy_graph()` via
+    /// the handle to deploy a graph before emitting buffers.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use adaptive_engine::executor::Executor;
+    ///
+    /// let executor = Executor::new();
+    /// ```
+    pub fn new() -> Self {
+        Self::with_queue(FifoQueue::new())
+    }
+
+    /// Create a new executor with a custom task queue implementation.
+    ///
+    /// This allows using different queue strategies for testing or
+    /// performance tuning.
+    ///
+    /// # Arguments
+    ///
+    /// * `queue` - The task queue implementation to use
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use adaptive_engine::executor::{Executor, RandomQueue};
+    ///
+    /// // Use random queue for stress testing
+    /// let executor = Executor::with_queue(RandomQueue::new());
+    /// ```
+    pub fn with_queue<Q: TaskQueue + 'static>(queue: Q) -> Self {
+        Self::with_queue_and_stats(queue, stats::StatisticsSender::noop())
+    }
+
+    /// Create a new executor with a custom task queue and statistics sender.
+    ///
+    /// This allows using different queue strategies and collecting execution
+    /// statistics for testing or monitoring.
+    ///
+    /// # Arguments
+    ///
+    /// * `queue` - The task queue implementation to use
+    /// * `stats_sender` - The statistics event sender for observability
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use adaptive_engine::executor::{Executor, FifoQueue, StatisticsSender, StatisticsEvent};
+    /// use std::sync::mpsc;
+    ///
+    /// // Create channel for statistics
+    /// let (tx, rx) = mpsc::channel::<StatisticsEvent>();
+    /// let sender = StatisticsSender::new(tx);
+    ///
+    /// // Create executor with statistics
+    /// let executor = Executor::with_queue_and_stats(FifoQueue::new(), sender);
+    /// ```
+    pub fn with_queue_and_stats<Q: TaskQueue + 'static>(
+        queue: Q,
+        stats_sender: stats::StatisticsSender,
+    ) -> Self {
+        Self::with_worker_count_queue_and_stats(1, queue, stats_sender)
+    }
+
+    /// Create a new executor with the specified number of worker threads.
+    pub fn with_worker_count(worker_count: usize) -> Self {
+        Self::with_worker_count_queue_and_stats(
+            worker_count,
+            FifoQueue::new(),
+            stats::StatisticsSender::noop(),
+        )
+    }
+
+    /// Create a new executor with worker count and statistics.
+    pub fn with_worker_count_and_stats(
+        worker_count: usize,
+        stats_sender: stats::StatisticsSender,
+    ) -> Self {
+        Self::with_worker_count_queue_and_stats(worker_count, FifoQueue::new(), stats_sender)
+    }
+
+    /// Create a new executor with all configuration options.
+    pub fn with_worker_count_queue_and_stats<Q: TaskQueue + 'static>(
+        worker_count: usize,
+        queue: Q,
+        stats_sender: stats::StatisticsSender,
+    ) -> Self {
+        let worker_count = worker_count.max(1);
+        let task_queue: Arc<Mutex<Box<dyn TaskQueue>>> = Arc::new(Mutex::new(Box::new(queue)));
+        let task_available = Arc::new(Condvar::new());
+
+        // Create the DelayedTaskSubmitter with access to the task queue and condvar
+        let delayed_submitter =
+            DelayedTaskSubmitter::new(Arc::clone(&task_queue), Arc::clone(&task_available));
+
+        let shared = Arc::new(ExecutorShared {
+            queries: Arc::new(RwLock::new(HashMap::new())),
+            task_queue,
+            metadata: Arc::new(Mutex::new(HashMap::new())),
+            delayed_submitter_handle: Some(delayed_submitter.get_handle()),
+            stats_sender,
+            next_task_id: AtomicU64::new(1),
+            shutting_down: Arc::new(AtomicBool::new(false)),
+            task_available,
+            worker_count,
+            shutdown_complete: AtomicBool::new(false),
+        });
+
+        Self {
+            shared,
+            delayed_submitter: Some(delayed_submitter),
+            worker_count,
+        }
+    }
+
+    /// Get a cloneable handle for submitting tasks.
+    ///
+    /// The handle can be cloned and shared across threads to submit work
+    /// from multiple source threads.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use adaptive_engine::executor::Executor;
+    ///
+    /// let mut executor = Executor::new();
+    /// let handle = executor.get_handle();
+    /// let handle_clone = handle.clone();
+    /// ```
+    pub fn get_handle(&self) -> ExecutorHandle {
+        ExecutorHandle {
+            task_queue: Arc::clone(&self.shared.task_queue),
+            metadata: Arc::clone(&self.shared.metadata),
+            queries: Arc::clone(&self.shared.queries),
+            shutting_down: Arc::clone(&self.shared.shutting_down),
+            task_available: Arc::clone(&self.shared.task_available),
+        }
+    }
+
+    /// Run the execution loop (blocking).
+    ///
+    /// This method runs on the execution thread and processes tasks until
+    /// a `Shutdown` task is received. It spawns N-1 additional worker threads
+    /// (for a total of N workers) and returns merged execution statistics
+    /// when shutdown is complete.
+    ///
+    /// # Returns
+    ///
+    /// Execution statistics tracking buffers processed, pipelines started/stopped, etc.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use adaptive_engine::executor::Executor;
+    /// use std::thread;
+    ///
+    /// let mut executor = Executor::new();
+    /// let handle = executor.get_handle();
+    ///
+    /// let exec_thread = thread::spawn(move || {
+    ///     executor.run()
+    /// });
+    ///
+    /// // Use handle to submit work...
+    /// handle.shutdown().unwrap();
+    /// let stats = exec_thread.join().unwrap();
+    /// ```
+    pub fn run(mut self) -> ExecutionStats {
+        let shared = Arc::clone(&self.shared);
+
+        // Spawn N-1 additional worker threads
+        let mut worker_handles = Vec::new();
+        for worker_id in 1..self.worker_count {
+            let shared_clone = Arc::clone(&shared);
+            let handle = std::thread::Builder::new()
+                .name(format!("nes-worker-{}", worker_id))
+                .spawn(move || shared_clone.worker_loop(worker_id))
+                .expect("Failed to spawn worker thread");
+            worker_handles.push(handle);
+        }
+
+        // Worker 0 runs on the current thread
+        let mut stats = shared.worker_loop(0);
+
+        // Join all worker threads and merge their stats
+        for handle in worker_handles {
+            match handle.join() {
+                Ok(worker_stats) => stats.merge(worker_stats),
+                Err(e) => {
+                    eprintln!("Worker thread panicked: {:?}", e);
+                }
+            }
+        }
+
+        // Shutdown the DelayedTaskSubmitter and wait for its thread to finish
+        if let Some(submitter) = self.delayed_submitter.take() {
+            submitter.shutdown();
+        }
+
+        // Aggregate errors from all queries into stats
+        {
+            let queries = shared.queries.read().unwrap();
+            for query_state in queries.values() {
+                stats.errors.extend(query_state.error_state.get_errors());
+            }
+        }
+
+        // Clear all query state to release pipeline/source resources.
+        // This is critical for FFI: dropping CppPipelineStage/CppSourceHandle
+        // calls C++ destructors (stage_destroy/source_destroy) to free C++ objects.
+        {
+            let mut queries = shared.queries.write().unwrap();
+            queries.clear();
+        }
+
+        stats
+    }
+
+    /// Execute a single task (for testing).
+    ///
+    /// Pops one task from the queue and executes it. Returns true if a task
+    /// was executed, false if the queue was empty.
+    ///
+    /// This is useful for step-through testing without spawning a thread.
+    ///
+    /// # Returns
+    ///
+    /// True if a task was executed, false if the queue was empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use adaptive_engine::executor::Executor;
+    ///
+    /// let mut executor = Executor::new();
+    /// let handle = executor.get_handle();
+    ///
+    /// // Submit a task
+    /// handle.shutdown().unwrap();
+    ///
+    /// // Execute it
+    /// let executed = executor.run_one();
+    /// assert!(executed);
+    /// ```
+    pub fn run_one(&mut self) -> bool {
+        let task = {
+            let mut queue = self.shared.task_queue.lock().unwrap();
+            queue.pop()
+        };
+
+        let Some(task) = task else {
+            return false;
+        };
+
+        let mut stats = ExecutionStats::new();
+
+        match task {
+            Task::WorkTask {
+                query_id,
+                pipeline_id,
+                buffer,
+            } => {
+                // Filter-on-dequeue: skip tasks for stopped/removed/stopping queries
+                // query_id 0 is backward compatibility - always process
+                if query_id != 0 && !self.shared.query_accepts_work(query_id) {
+                    // Must decrement pending counter even for skipped tasks
+                    // (see run() loop for detailed explanation).
+                    self.shared
+                        .decrement_ref_and_check_stop(&pipeline_id, &mut stats);
+                    return true; // Task was "executed" (skipped)
+                }
+                self.shared
+                    .execute_work_task(0, query_id, &pipeline_id, buffer, &mut stats);
+            }
+            Task::DeployGraph { graph, query_id } => {
+                self.shared
+                    .execute_deploy_graph(0, graph, query_id, &mut stats);
+            }
+            Task::StartSource {
+                query_id,
+                source_id,
+            } => {
+                // Filter-on-dequeue: skip tasks for stopped/removed queries
+                // query_id 0 is backward compatibility - always process
+                if query_id != 0 && !self.shared.query_exists(query_id) {
+                    return true; // Task was "executed" (skipped)
+                }
+                self.shared
+                    .execute_start_source_task(0, &source_id, &mut stats);
+            }
+            Task::EndOfStream {
+                query_id,
+                source_id,
+                pipeline_id,
+            } => {
+                // Filter-on-dequeue: skip tasks for stopped/removed queries
+                // query_id 0 is backward compatibility - always process
+                if query_id != 0 && !self.shared.query_exists(query_id) {
+                    return true; // Task was "executed" (skipped)
+                }
+                self.shared
+                    .execute_eos_task(&source_id, &pipeline_id, &mut stats);
+            }
+            Task::StopPipelineTask { pipeline_id } => {
+                self.shared.execute_stop_task(0, &pipeline_id, &mut stats);
+            }
+            Task::SourceError {
+                query_id,
+                source_id,
+                error,
+            } => {
+                self.shared
+                    .execute_source_error_task(query_id, &source_id, &error, &mut stats);
+            }
+            Task::Shutdown => {
+                // Stop all active pipelines
+                self.shared.stop_all_pipelines(&mut stats);
+            }
+        }
+
+        true
     }
 }
 

@@ -1,12 +1,32 @@
 [
   {
     "id": 1,
-    "status": "pending",
+    "status": "done",
     "description": "Hook up engine.number_of_worker_threads methods once the engine is multi-threaded"
   },
   {
     "id": 2,
-    "status": "pending",
+    "status": "done",
     "description": "Enable sanitizer for the engine build"
+  },
+  {
+    "id": 3,
+    "status": "pending",
+    "description": "Plan integration of NebulaStream Sequence Numbers into the adaptive-engine with per-node tracking of sequence number completion"
+  },
+  {
+    "id": 4,
+    "status": "pending",
+    "description": "Move to a single graph model inside the Rust engine"
+  },
+  {
+    "id": 5,
+    "status": "pending",
+    "description": "Change the engine interface to modify the pipeline graph by adding and removing nodes"
+  },
+  {
+    "id": 6,
+    "status": "pending",
+    "description": "Remove the global pipeline metadata HashMap. Store PipelineMetadata within the pipeline itself — the global Mutex is destroying performance"
   }
 ]

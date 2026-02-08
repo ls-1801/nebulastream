@@ -18,9 +18,6 @@
 
 #include <atomic>
 #include <cstring>
-#include <memory>
-#include <mutex>
-#include <set>
 #include <vector>
 
 namespace adaptive_engine::test
@@ -45,10 +42,15 @@ struct TestBuffer : BufferHandleBase
     std::vector<uint8_t> data;
     TestBufferMetadata metadata;
     std::atomic<int> ref_count{1};
+    std::atomic<int>* active_counter{nullptr};
 
-    TestBuffer(size_t size, const TestBufferMetadata& meta) : data(size), metadata(meta) { }
+    TestBuffer(size_t size, const TestBufferMetadata& meta, std::atomic<int>* counter = nullptr)
+        : data(size), metadata(meta), active_counter(counter)
+    {
+    }
 
-    TestBuffer(const void* src, size_t size, const TestBufferMetadata& meta) : data(size), metadata(meta)
+    TestBuffer(const void* src, size_t size, const TestBufferMetadata& meta, std::atomic<int>* counter = nullptr)
+        : data(size), metadata(meta), active_counter(counter)
     {
         if (src != nullptr && size > 0)
         {
@@ -66,6 +68,10 @@ struct TestBuffer : BufferHandleBase
     {
         if (ref_count.fetch_sub(1) == 1)
         {
+            if (active_counter)
+            {
+                active_counter->fetch_sub(1);
+            }
             delete this;
         }
     }
@@ -73,7 +79,7 @@ struct TestBuffer : BufferHandleBase
 
 /// Test implementation of buffer management for C++ tests.
 /// Standalone utility (not a BufferProvider subclass). Tracks active
-/// buffers for leak detection in tests.
+/// buffers for leak detection in tests via an atomic counter.
 class TestBufferProvider
 {
 public:
@@ -84,12 +90,9 @@ public:
     /// Creates a copy of the data for test isolation.
     BufferHandle wrap(void* data, size_t size, const TestBufferMetadata& metadata)
     {
-        auto* buffer = new TestBuffer(data, size, metadata);
+        active_count_.fetch_add(1);
+        auto* buffer = new TestBuffer(data, size, metadata, &active_count_);
         BufferHandle handle{buffer};
-
-        std::lock_guard<std::mutex> lock(mutex_);
-        active_buffers_.insert(buffer);
-        buffer->ref_count.store(1);
         return handle;
     }
 
@@ -110,32 +113,17 @@ public:
     /// Allocate a new buffer of the specified size.
     BufferHandle allocate(size_t size)
     {
+        active_count_.fetch_add(1);
         TestBufferMetadata empty_metadata{};
-        auto* buffer = new TestBuffer(size, empty_metadata);
+        auto* buffer = new TestBuffer(size, empty_metadata, &active_count_);
         BufferHandle handle{buffer};
-
-        std::lock_guard<std::mutex> lock(mutex_);
-        active_buffers_.insert(buffer);
         return handle;
     }
 
     /// Test utilities
 
     /// Get the number of active buffers (useful for leak detection in tests).
-    /// Note: This checks which tracked buffers still have ref_count > 0.
-    size_t active_buffer_count() const
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        size_t count = 0;
-        for (auto* buf : active_buffers_)
-        {
-            if (buf->ref_count.load() > 0)
-            {
-                ++count;
-            }
-        }
-        return count;
-    }
+    size_t active_buffer_count() const { return static_cast<size_t>(active_count_.load()); }
 
     /// Get the reference count of a buffer (for test assertions).
     int get_ref_count(BufferHandle handle) const
@@ -145,8 +133,7 @@ public:
     }
 
 private:
-    mutable std::mutex mutex_;
-    std::set<TestBuffer*> active_buffers_;
+    std::atomic<int> active_count_{0};
 };
 
 } /// namespace adaptive_engine::test

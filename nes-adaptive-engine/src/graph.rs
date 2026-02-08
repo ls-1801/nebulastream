@@ -903,11 +903,9 @@ mod tests {
             }))
             .unwrap();
 
-        assert!(
-            graph
-                .connect(&PipelineId::new("p1"), &PipelineId::new("p2"))
-                .is_ok()
-        );
+        assert!(graph
+            .connect(&PipelineId::new("p1"), &PipelineId::new("p2"))
+            .is_ok());
 
         let successors = graph.get_successors(&PipelineId::new("p1"));
         assert_eq!(successors.len(), 1);
@@ -1032,10 +1030,8 @@ mod tests {
             .unwrap();
 
         assert!(graph.get_pipeline(&id).is_some());
-        assert!(
-            graph
-                .get_pipeline(&PipelineId::new("nonexistent"))
-                .is_none()
-        );
+        assert!(graph
+            .get_pipeline(&PipelineId::new("nonexistent"))
+            .is_none());
     }
 }
