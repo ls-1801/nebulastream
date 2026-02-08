@@ -77,6 +77,10 @@ fn test_source_failure() {
     // Wait for query to terminate (failure cascade)
     assert!(stats.wait_for_query_terminated_id(query_id, DEFAULT_TIMEOUT));
 
+    // A QueryError event should have been emitted for the source failure
+    assert!(stats.wait_for_query_error_id(query_id, DEFAULT_TIMEOUT));
+    assert!(stats.count_query_errors() >= 1);
+
     // Verify
     assert!(stats.count_query_starts() >= 1);
     assert!(stats.count_query_running() >= 1);
@@ -251,6 +255,10 @@ fn test_race_between_failure_and_eos() {
 
     // Query should terminate (either by failure or completion)
     assert!(stats.wait_for_query_terminated_id(query_id, DEFAULT_TIMEOUT));
+
+    // A QueryError should have been emitted for the pipeline execution failure
+    assert!(stats.wait_for_query_error_id(query_id, DEFAULT_TIMEOUT));
+
     assert!(source_ctrl.wait_stopped(DEFAULT_TIMEOUT));
 
     let _exec_stats = engine.shutdown();

@@ -972,7 +972,9 @@ pub unsafe extern "C" fn engine_poll_event_ffi(
             unsafe { *out_worker_id = worker_id };
             unsafe { *out_query_id = query_id };
         }
-        StatisticsEvent::SourceStarted { .. } | StatisticsEvent::PipelineExecutionError { .. } => {
+        StatisticsEvent::SourceStarted { .. }
+        | StatisticsEvent::PipelineExecutionError { .. }
+        | StatisticsEvent::QueryError { .. } => {
             // Internal events consumed by QueryEngine, should not reach here.
             // Defensive: skip and report no event.
             return false;

@@ -402,6 +402,59 @@ impl ExecutorHandle {
         Ok(())
     }
 
+    /// Terminate pipelines for a failed query.
+    ///
+    /// Marks all `pipeline_ids` as failed (atomic, lock-free for the hot path)
+    /// and initiates shutdown of `source_ids` by setting stop flags and
+    /// enqueuing `StopPipelineTask` for each source.
+    ///
+    /// This is the query engine's single entry point for error-driven
+    /// termination, replacing direct graph access.
+    pub fn terminate_pipelines(
+        &self,
+        pipeline_ids: &[PipelineId],
+        source_ids: &[PipelineId],
+    ) -> Result<(), ExecutorError> {
+        // 1. Mark all pipelines as failed (atomic flag, no queue interaction)
+        {
+            let graph = self
+                .graph
+                .read()
+                .map_err(|e| ExecutorError::TaskQueue(format!("Graph lock poisoned: {}", e)))?;
+
+            for pid in pipeline_ids {
+                if let Some(node) = graph.get_node(pid) {
+                    node.metadata().mark_failed();
+                }
+            }
+
+            // 2. Set source stop flags so source threads terminate
+            for source_id in source_ids {
+                if let Some(node) = graph.get_node(source_id) {
+                    node.metadata().request_source_stop();
+                }
+            }
+        }
+
+        // 3. Enqueue StopPipelineTask for each source
+        if !source_ids.is_empty() {
+            let mut queue = self
+                .task_queue
+                .lock()
+                .map_err(|e| ExecutorError::TaskQueue(format!("Queue lock poisoned: {}", e)))?;
+
+            for source_id in source_ids {
+                queue.push(task::Task::StopPipelineTask {
+                    pipeline_id: source_id.clone(),
+                });
+            }
+
+            self.task_available.notify_all();
+        }
+
+        Ok(())
+    }
+
     /// Get a read lock on the graph. Used by Engine layer for query tracking.
     pub fn graph(&self) -> &Arc<RwLock<PipelineGraph>> {
         &self.graph
@@ -600,8 +653,13 @@ impl ExecutorShared {
                 node.metadata().mark_failed();
 
                 // Emit error event — the query layer will handle stopping the query
-                self.stats_sender
-                    .pipeline_execution_error(worker_id as u64, pipeline_id.clone());
+                self.stats_sender.pipeline_execution_error(
+                    worker_id as u64,
+                    pipeline_id.clone(),
+                    e.to_string(),
+                    EntityType::Pipeline,
+                    TaskType::WorkTask,
+                );
 
                 // Still decrement pending counter for proper lifecycle tracking
                 drop(graph_guard);
@@ -760,6 +818,15 @@ impl ExecutorShared {
                             eprintln!("FATAL ERROR: Pipeline {} setup failed: {}", pipeline_id, e);
                             eprintln!("Terminating execution immediately");
 
+                            // Emit error event so the query layer is notified
+                            self.stats_sender.pipeline_execution_error(
+                                worker_id as u64,
+                                pipeline_id.clone(),
+                                e.to_string(),
+                                EntityType::Pipeline,
+                                TaskType::DeployGraph,
+                            );
+
                             stats.errors_encountered += 1;
                             setup_failed = true;
                             break;
@@ -896,16 +963,6 @@ impl ExecutorShared {
                 }
             }
 
-            // Propagate failed flag to successors so they also skip flush
-            if is_failed {
-                let graph_guard = self.graph.read().unwrap();
-                for successor_id in &successors {
-                    if let Some(node) = graph_guard.get_node(successor_id) {
-                        node.metadata().mark_failed();
-                    }
-                }
-            }
-
             // Emit PipelineStop event
             self.stats_sender
                 .pipeline_stop(worker_id as u64, 0, pipeline_id.clone());
@@ -986,11 +1043,22 @@ impl ExecutorShared {
             stats.errors_encountered += 1;
 
             // Emit error event for the query layer
-            self.stats_sender
-                .pipeline_execution_error(worker_id as u64, pipeline_id.clone());
+            self.stats_sender.pipeline_execution_error(
+                worker_id as u64,
+                pipeline_id.clone(),
+                e.clone(),
+                EntityType::Pipeline,
+                TaskType::StopPipeline,
+            );
 
-            // Mark all successors as failed so they skip flush/stop
-            // when their stop task is processed (cascading failure).
+            // Emit PipelineStop
+            self.stats_sender
+                .pipeline_stop(worker_id as u64, 0, pipeline_id.clone());
+
+            // Mark direct successors as failed before cascading EndOfStream.
+            // This is a mechanical safety measure: successors of a corrupted
+            // stream must skip flush/teardown regardless of whether the
+            // QueryEngine's terminate_pipelines() has run yet.
             {
                 let graph_guard = self.graph.read().unwrap();
                 for successor_id in &successors {
@@ -999,10 +1067,6 @@ impl ExecutorShared {
                     }
                 }
             }
-
-            // Emit PipelineStop
-            self.stats_sender
-                .pipeline_stop(worker_id as u64, 0, pipeline_id.clone());
 
             // Cascade EndOfStream to successors
             {
@@ -1057,11 +1121,11 @@ impl ExecutorShared {
         }
 
         // 4. Call teardown()
-        let teardown_failed = {
+        let teardown_error_message: Option<String> = {
             let graph_guard = self.graph.read().unwrap();
 
             if let Some(pipeline) = graph_guard.get_pipeline(pipeline_id) {
-                let mut failed = false;
+                let mut error_msg = None;
                 loop {
                     let (emit_tx, _emit_rx) = channel();
                     let context = context::ExecutorContext::new(
@@ -1081,29 +1145,48 @@ impl ExecutorShared {
                         Err(e) => {
                             eprintln!("Pipeline {} teardown failed: {}", pipeline_id, e);
 
+                            let msg = e.to_string();
                             self.error_state.record_error(ExecutionError {
                                 entity_id: pipeline_id.clone(),
                                 entity_type: EntityType::Pipeline,
-                                error: e.to_string(),
+                                error: msg.clone(),
                                 task_type: TaskType::StopPipeline,
                             });
 
                             stats.errors_encountered += 1;
-                            failed = true;
+                            error_msg = Some(msg);
                             break;
                         }
                     }
                 }
-                failed
+                error_msg
             } else {
-                false
+                None
             }
         };
 
-        if teardown_failed {
+        if let Some(ref teardown_error_msg) = teardown_error_message {
             // Emit error event for the query layer
-            self.stats_sender
-                .pipeline_execution_error(worker_id as u64, pipeline_id.clone());
+            self.stats_sender.pipeline_execution_error(
+                worker_id as u64,
+                pipeline_id.clone(),
+                teardown_error_msg.clone(),
+                EntityType::Pipeline,
+                TaskType::StopPipeline,
+            );
+
+            // Mark direct successors as failed before cascading EndOfStream.
+            // This is a mechanical safety measure: successors of a corrupted
+            // stream must skip flush/teardown regardless of whether the
+            // QueryEngine's terminate_pipelines() has run yet.
+            {
+                let graph_guard = self.graph.read().unwrap();
+                for successor_id in &successors {
+                    if let Some(node) = graph_guard.get_node(successor_id) {
+                        node.metadata().mark_failed();
+                    }
+                }
+            }
         }
 
         // 5. Emit PipelineStop event
@@ -1211,8 +1294,13 @@ impl ExecutorShared {
                 }
 
                 // Emit error event — the query layer will handle stopping the query
-                self.stats_sender
-                    .pipeline_execution_error(worker_id as u64, source_id.clone());
+                self.stats_sender.pipeline_execution_error(
+                    worker_id as u64,
+                    source_id.clone(),
+                    e.to_string(),
+                    EntityType::Source,
+                    TaskType::StartSource,
+                );
             }
         }
     }
@@ -1255,8 +1343,13 @@ impl ExecutorShared {
         }
 
         // Emit error event — the query layer will handle stopping the query
-        self.stats_sender
-            .pipeline_execution_error(worker_id as u64, source_id.clone());
+        self.stats_sender.pipeline_execution_error(
+            worker_id as u64,
+            source_id.clone(),
+            error.to_string(),
+            EntityType::Source,
+            TaskType::StartSource,
+        );
     }
 
     /// Execute an end-of-stream task.

@@ -53,6 +53,7 @@
 //! ```
 
 use crate::executor::QueryId;
+use crate::executor::error::{EntityType, TaskType};
 use crate::pipeline::PipelineId;
 use std::sync::mpsc::Sender;
 
@@ -202,12 +203,38 @@ pub enum StatisticsEvent {
     ///
     /// This event is consumed by the QueryEngine to initiate per-query
     /// termination: it looks up the query for the failed pipeline and issues
-    /// stop_pipelines() for that query's sources.
+    /// terminate_pipelines() for that query.
     PipelineExecutionError {
         /// Worker thread where the error occurred.
         worker_id: WorkerId,
         /// Pipeline that failed.
         pipeline_id: PipelineId,
+        /// Human-readable description of the error.
+        error_message: String,
+        /// Type of entity where the error occurred.
+        entity_type: EntityType,
+        /// Type of task being executed when the error occurred.
+        task_type: TaskType,
+    },
+
+    /// Emitted by the QueryEngine when a query fails due to a pipeline error.
+    ///
+    /// This is a consumer-visible event synthesized by the QueryEngine from
+    /// `PipelineExecutionError`. It carries the query context so consumers
+    /// know which query was affected.
+    QueryError {
+        /// Worker thread where the error originated.
+        worker_id: WorkerId,
+        /// Query that failed.
+        query_id: QueryId,
+        /// Pipeline that caused the failure.
+        pipeline_id: PipelineId,
+        /// Human-readable description of the error.
+        error_message: String,
+        /// Type of entity where the error occurred.
+        entity_type: EntityType,
+        /// Type of task being executed when the error occurred.
+        task_type: TaskType,
     },
 }
 
@@ -380,10 +407,20 @@ impl StatisticsSender {
 
     /// Emit a PipelineExecutionError event.
     #[inline]
-    pub fn pipeline_execution_error(&self, worker_id: WorkerId, pipeline_id: PipelineId) {
+    pub fn pipeline_execution_error(
+        &self,
+        worker_id: WorkerId,
+        pipeline_id: PipelineId,
+        error_message: String,
+        entity_type: EntityType,
+        task_type: TaskType,
+    ) {
         self.emit(StatisticsEvent::PipelineExecutionError {
             worker_id,
             pipeline_id,
+            error_message,
+            entity_type,
+            task_type,
         });
     }
 }

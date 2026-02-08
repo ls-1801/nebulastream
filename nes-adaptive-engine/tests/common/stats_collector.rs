@@ -158,6 +158,10 @@ impl StatsCollector {
         self.count_matching(|e| matches!(e, StatisticsEvent::TaskEmit { .. }))
     }
 
+    pub fn count_query_errors(&self) -> usize {
+        self.count_matching(|e| matches!(e, StatisticsEvent::QueryError { .. }))
+    }
+
     // --- Wait methods ---
 
     pub fn wait_for_query_running_id(&self, query_id: QueryId, timeout: Duration) -> bool {
@@ -236,6 +240,14 @@ impl StatsCollector {
         self.wait_for_count(
             n,
             |e| matches!(e, StatisticsEvent::TaskEmit { .. }),
+            timeout,
+        )
+    }
+
+    pub fn wait_for_query_error_id(&self, query_id: QueryId, timeout: Duration) -> bool {
+        self.wait_for_count(
+            1,
+            |e| matches!(e, StatisticsEvent::QueryError { query_id: qid, .. } if *qid == query_id),
             timeout,
         )
     }

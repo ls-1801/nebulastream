@@ -82,6 +82,9 @@ fn test_failure_during_pipeline_teardown() {
     // Wait for query to terminate (failure cascade from teardown error)
     assert!(stats.wait_for_query_terminated_id(query_id, DEFAULT_TIMEOUT));
 
+    // A QueryError event should have been emitted for the teardown failure
+    assert!(stats.wait_for_query_error_id(query_id, DEFAULT_TIMEOUT));
+
     // Good should have been gracefully stopped (it teardowns before fail)
     assert!(good_ctrl.was_teardown_called());
 
@@ -356,6 +359,10 @@ fn test_pipeline_execution_failure() {
 
     // Wait for query to terminate (pipeline failure on 2nd buffer)
     assert!(stats.wait_for_query_terminated_id(query_id, DEFAULT_TIMEOUT));
+
+    // A QueryError event should have been emitted for this query
+    assert!(stats.wait_for_query_error_id(query_id, DEFAULT_TIMEOUT));
+    assert!(stats.count_query_errors() >= 1);
 
     // Pipeline was invoked at least 2 times (failed on 2nd or later)
     assert!(pipeline_ctrl.invocation_count() >= 2);

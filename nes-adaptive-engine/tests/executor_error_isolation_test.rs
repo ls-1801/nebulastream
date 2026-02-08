@@ -22,8 +22,8 @@
 
 mod common;
 
-use adaptive_engine::executor::stats::StatisticsSender;
 use adaptive_engine::executor::Executor;
+use adaptive_engine::executor::stats::StatisticsSender;
 use adaptive_engine::graph::PipelineGraph;
 use adaptive_engine::pipeline::{Buffer, PipelineId};
 use common::capturing_sink::capturing_sink;

@@ -221,18 +221,27 @@ impl QueryTracker {
                 }]
             }
 
-            StatisticsEvent::PipelineExecutionError { pipeline_id, .. } => {
+            StatisticsEvent::PipelineExecutionError {
+                pipeline_id,
+                error_message,
+                entity_type,
+                task_type,
+                ..
+            } => {
                 // A pipeline failed — mark the query for stop.
-                // The actual stop_pipelines call is made by the processing loop.
+                // The actual terminate_pipelines call is made by the processing loop.
                 let qid = self.lookup_query(&pipeline_id);
                 if let Some(state) = self.queries.get_mut(&qid) {
                     if !state.stop_issued {
                         state.stop_issued = true;
-                        // Return a sentinel to signal the processing loop to issue the stop.
-                        // We reuse the event so the loop can extract the query_id.
+                        // Return the enriched error so the loop can issue the stop
+                        // and forward a QueryError to consumers.
                         return vec![StatisticsEvent::PipelineExecutionError {
                             worker_id: 0,
                             pipeline_id,
+                            error_message,
+                            entity_type,
+                            task_type,
                         }];
                     }
                 }
@@ -369,33 +378,35 @@ impl QueryEngine {
                 Ok(event) => {
                     let events = tracker.lock().unwrap().process(event);
                     for e in events {
-                        // If this is a PipelineExecutionError, mark all query pipelines
-                        // as failed and issue stop_pipelines for sources.
+                        // If this is a PipelineExecutionError, terminate all query
+                        // pipelines and forward a QueryError to consumers.
                         if let StatisticsEvent::PipelineExecutionError {
-                            ref pipeline_id, ..
+                            ref pipeline_id,
+                            ref error_message,
+                            entity_type,
+                            task_type,
+                            ..
                         } = e
                         {
-                            let (source_ids, all_pipeline_ids) = {
+                            let (source_ids, all_pipeline_ids, qid) = {
                                 let t = tracker.lock().unwrap();
                                 let qid = t.lookup_query(pipeline_id);
-                                (t.get_source_ids(qid), t.get_pipeline_ids(qid))
+                                (t.get_source_ids(qid), t.get_pipeline_ids(qid), qid)
                             };
 
-                            // Mark ALL pipelines in the query as failed so they
-                            // skip flush during the stop cascade.
-                            {
-                                let graph = executor_handle.graph().read().unwrap();
-                                for pid in &all_pipeline_ids {
-                                    if let Some(node) = graph.get_node(pid) {
-                                        node.metadata().mark_failed();
-                                    }
-                                }
-                            }
+                            // Terminate: mark all pipelines as failed + stop sources
+                            let _ =
+                                executor_handle.terminate_pipelines(&all_pipeline_ids, &source_ids);
 
-                            if !source_ids.is_empty() {
-                                let _ = executor_handle.stop_pipelines(&source_ids);
-                            }
-                            // Don't forward PipelineExecutionError to consumers
+                            // Forward a QueryError to consumers
+                            let _ = processed_tx.send(StatisticsEvent::QueryError {
+                                worker_id: 0,
+                                query_id: qid,
+                                pipeline_id: pipeline_id.clone(),
+                                error_message: error_message.clone(),
+                                entity_type,
+                                task_type,
+                            });
                             continue;
                         }
                         if processed_tx.send(e).is_err() {
