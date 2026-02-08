@@ -36,8 +36,8 @@
 
 use crate::pipeline::{Buffer, Pipeline, PipelineError, PipelineId};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Filter pipeline that conditionally passes buffers based on a predicate.
 ///

@@ -888,6 +888,50 @@ impl PipelineGraph {
     }
 }
 
+impl PipelineGraph {
+    /// Merge another graph's contents into this graph, consuming it.
+    ///
+    /// Moves all nodes, edges, reverse edges, and source designations from `other`
+    /// into `self`. Nodes with duplicate IDs are skipped.
+    pub fn merge(&mut self, other: PipelineGraph) {
+        let PipelineGraph {
+            nodes,
+            edges,
+            reverse_edges,
+            sources,
+        } = other;
+
+        for (id, node) in nodes {
+            if self.nodes.contains_key(&id) {
+                continue;
+            }
+            self.nodes.insert(id.clone(), node);
+
+            if let Some(e) = edges.get(&id) {
+                self.edges
+                    .entry(id.clone())
+                    .or_default()
+                    .extend(e.iter().cloned());
+            } else {
+                self.edges.entry(id.clone()).or_default();
+            }
+
+            if let Some(re) = reverse_edges.get(&id) {
+                self.reverse_edges
+                    .entry(id.clone())
+                    .or_default()
+                    .extend(re.iter().cloned());
+            } else {
+                self.reverse_edges.entry(id.clone()).or_default();
+            }
+
+            if sources.contains(&id) {
+                self.sources.insert(id);
+            }
+        }
+    }
+}
+
 impl Default for PipelineGraph {
     fn default() -> Self {
         Self::new()
@@ -959,9 +1003,11 @@ mod tests {
             }))
             .unwrap();
 
-        assert!(graph
-            .connect(&PipelineId::new("p1"), &PipelineId::new("p2"))
-            .is_ok());
+        assert!(
+            graph
+                .connect(&PipelineId::new("p1"), &PipelineId::new("p2"))
+                .is_ok()
+        );
 
         let successors = graph.get_successors(&PipelineId::new("p1"));
         assert_eq!(successors.len(), 1);
@@ -1086,8 +1132,10 @@ mod tests {
             .unwrap();
 
         assert!(graph.get_pipeline(&id).is_some());
-        assert!(graph
-            .get_pipeline(&PipelineId::new("nonexistent"))
-            .is_none());
+        assert!(
+            graph
+                .get_pipeline(&PipelineId::new("nonexistent"))
+                .is_none()
+        );
     }
 }

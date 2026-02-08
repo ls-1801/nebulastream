@@ -18,11 +18,10 @@
 //! pipelines access to executor services during execution, matching NebulaStream's
 //! PipelineExecutionContext interface.
 
-use crate::executor::QueryId;
 use crate::pipeline::{Buffer, PipelineError, PipelineId};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::Mutex;
 
 /// Execution context provided to pipelines during execution.
 ///
@@ -107,10 +106,6 @@ pub struct ExecutorContext {
     /// The ID of the pipeline being executed
     pipeline_id: PipelineId,
 
-    /// The ID of the query this pipeline belongs to
-    #[allow(dead_code)]
-    query_id: QueryId,
-
     /// The worker thread ID (0 for single-threaded executor)
     worker_id: usize,
 
@@ -137,26 +132,6 @@ impl ExecutorContext {
     ) -> Self {
         Self {
             pipeline_id,
-            query_id: 0,
-            worker_id,
-            worker_count,
-            emit_tx,
-            repeat_buffer: Mutex::new(None),
-            repeat_delay_ms: AtomicU64::new(0),
-        }
-    }
-
-    /// Create a new executor context with a specific query_id.
-    pub fn with_query_id(
-        pipeline_id: PipelineId,
-        query_id: QueryId,
-        worker_id: usize,
-        worker_count: usize,
-        emit_tx: Sender<(PipelineId, Buffer)>,
-    ) -> Self {
-        Self {
-            pipeline_id,
-            query_id,
             worker_id,
             worker_count,
             emit_tx,

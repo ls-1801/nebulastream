@@ -14,8 +14,8 @@
 
 //! Pipeline metadata for reference counting and lifecycle management.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Metadata for tracking pipeline execution state.
 ///
@@ -77,6 +77,13 @@ pub struct PipelineMetadata {
     /// Used to prevent duplicate StopPipelineTask enqueues when multiple
     /// workers concurrently observe should_terminate() && pending == 0.
     pub stop_task_enqueued: AtomicBool,
+
+    /// Whether this pipeline has encountered a fatal error during execution.
+    ///
+    /// Set when pipeline.execute() returns an error. Future buffers for this
+    /// pipeline will be skipped. The query layer is responsible for stopping
+    /// the entire query when it observes the error event.
+    pub failed: AtomicBool,
 }
 
 impl PipelineMetadata {
@@ -91,6 +98,7 @@ impl PipelineMetadata {
             source_started: AtomicBool::new(false),
             source_stop_requested: Arc::new(AtomicBool::new(false)),
             stop_task_enqueued: AtomicBool::new(false),
+            failed: AtomicBool::new(false),
         }
     }
 
@@ -187,6 +195,19 @@ impl PipelineMetadata {
     /// Returns true if the source should stop emitting data.
     pub fn is_source_stop_requested(&self) -> bool {
         self.source_stop_requested.load(Ordering::SeqCst)
+    }
+
+    /// Mark this pipeline as failed due to an execution error.
+    ///
+    /// Future buffers will be skipped. The query layer handles stopping
+    /// the entire query in response to the error event.
+    pub fn mark_failed(&self) {
+        self.failed.store(true, Ordering::SeqCst);
+    }
+
+    /// Check if this pipeline has been marked as failed.
+    pub fn is_failed(&self) -> bool {
+        self.failed.load(Ordering::SeqCst)
     }
 
     /// Get a shared reference to the source stop flag (source nodes only).

@@ -26,15 +26,19 @@
 //! - **Synchronization:** Mutex for task queue, RwLock for graph, Atomic for reference counting,
 //!   Condvar for efficient task notification
 //!
-//! # Simplified Lifecycle (v0.2.0+)
+//! # Architecture
 //!
-//! The executor now automatically manages pipeline lifecycle:
+//! The executor operates on a **single `PipelineGraph`** shared across all workers.
+//! Query-level concepts (submit_query, stop_query) are handled at the `Engine` layer
+//! above, which maps query IDs to pipeline IDs. The executor only knows about
+//! pipelines and their graph topology.
+//!
+//! # Lifecycle
 //!
 //! ```no_run
 //! # use adaptive_engine::Executor;
 //! # use adaptive_engine::graph::PipelineGraph;
 //! # use adaptive_engine::pipeline::{Buffer, PipelineId};
-//! # use adaptive_engine::sequence::SequenceNumber;
 //! # use std::thread;
 //! let executor = Executor::new();
 //! let handle = executor.get_handle();
@@ -55,41 +59,23 @@
 //! handle.shutdown().unwrap();
 //! ```
 //!
-//! # Legacy Lifecycle (backward compatible)
-//!
-//! The manual lifecycle methods remain available but are deprecated:
-//!
-//! 1. **Deploy graph** - `handle.deploy_graph(graph)` replaces the current graph and auto-starts pipelines
-//! 2. **Start pipelines** - `handle.start_pipeline(id)` (DEPRECATED - auto-starts on deploy)
-//! 3. **Execute buffers** - Sources call `handle.emit(id, buffer)` to process data
-//! 4. **Stop pipelines** - `handle.stop_pipeline(id)` (DEPRECATED - use end_of_stream or shutdown)
-//! 5. **Shutdown** - `handle.shutdown()` auto-stops all pipelines and stops the execution thread
-//!
-//! # Lifecycle Invariants
-//!
-//! The executor enforces critical lifecycle invariants via panics (not errors):
-//!
-//! - **MUST start before execute**: Attempting to execute a pipeline that was never started panics
-//! - **MUST setup before execute**: Attempting to execute a pipeline whose `setup()` failed panics
-//! - **MUST teardown after setup**: If `setup()` succeeds, `teardown()` is guaranteed to be called
-//!
-//! These are programming errors that should be caught during development, not runtime errors.
-//!
 //! # Error Handling
 //!
-//! The executor implements fail-fast error handling:
+//! The executor implements per-pipeline error handling:
 //!
-//! - **Immediate termination**: Any pipeline or source error stops query processing immediately
-//! - **No graceful shutdown**: On error, pending tasks are skipped without calling flush/teardown
+//! - **Per-pipeline isolation**: A failed pipeline is marked as failed and skips future buffers,
+//!   but other pipelines continue processing normally
+//! - **Error propagation via events**: The executor emits `PipelineExecutionError` events that
+//!   the query layer (QueryEngine) uses to initiate per-query termination
 //! - **Error collection**: All errors are captured in `ExecutionStats.errors` with full context
-//! - **Thread safety**: Error state uses atomic flag for lock-free checking in hot path
+//! - **Thread safety**: Per-pipeline failed flag uses atomic bool for lock-free checking
 //!
 //! When an error occurs:
 //! 1. Error is recorded with entity ID, type, and task context
-//! 2. Atomic error flag is set (visible to all threads)
-//! 3. Main loop detects flag and drains queue without processing
-//! 4. Already-started tasks may complete (cannot be interrupted)
-//! 5. Already-emitted buffers remain downstream (streaming semantics)
+//! 2. Pipeline is marked as failed (per-pipeline atomic flag)
+//! 3. `PipelineExecutionError` event is emitted for the query layer
+//! 4. Future buffers for the failed pipeline are skipped
+//! 5. Other pipelines in the graph continue processing normally
 //!
 //! Example:
 //! ```no_run
@@ -105,7 +91,7 @@
 //! let stats = executor.run();
 //!
 //! if stats.has_errors() {
-//!     eprintln!("Query failed: {:?}", stats.first_error());
+//!     eprintln!("Execution failed: {:?}", stats.first_error());
 //!     for error in &stats.errors {
 //!         eprintln!("  - {}: {}", error.entity_id, error.error);
 //!     }
@@ -128,11 +114,13 @@ pub use queue::{FifoQueue, LifoQueue, PriorityQueue, RandomQueue, TaskQueue};
 pub use stats::{StatisticsEvent, StatisticsSender, TaskId, WorkerId};
 
 /// Unique identifier for a submitted query.
+///
+/// Used at the Engine/FFI layer to track queries. The executor itself
+/// does not use QueryId — it operates on a single PipelineGraph.
 pub type QueryId = u64;
 use crate::graph::{PipelineGraph, PipelineNode};
 use crate::pipeline::{Buffer, PipelineId};
 use error::{EntityType, ExecutionError, TaskType};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
@@ -153,7 +141,7 @@ pub struct ErrorState {
 
 impl ErrorState {
     /// Create a new error state with no errors.
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             has_error: AtomicBool::new(false),
             errors: Mutex::new(Vec::new()),
@@ -164,7 +152,7 @@ impl ErrorState {
     ///
     /// Sets the atomic error flag (visible to all threads) and appends
     /// the error details to the collection.
-    fn record_error(&self, error: ExecutionError) {
+    pub fn record_error(&self, error: ExecutionError) {
         // Set flag first (atomic, visible to all threads)
         self.has_error.store(true, Ordering::SeqCst);
 
@@ -172,81 +160,24 @@ impl ErrorState {
         self.errors.lock().unwrap().push(error);
     }
 
-    /// Check if any error has occurred for this query.
+    /// Check if any error has occurred.
     ///
     /// Uses atomic load for lock-free checking in the hot path.
-    /// Used for task filtering - tasks for errored queries are skipped.
     pub fn has_error(&self) -> bool {
         self.has_error.load(Ordering::SeqCst)
     }
 
     /// Get a copy of all errors.
-    fn get_errors(&self) -> Vec<ExecutionError> {
+    pub fn get_errors(&self) -> Vec<ExecutionError> {
         self.errors.lock().unwrap().clone()
     }
 }
 
-/// State for a single query.
-///
-/// Contains all state associated with a query including its pipeline graph,
-/// error state, and source count. This enables multi-query support where
-/// multiple queries can run concurrently with isolated state.
-pub struct QueryState {
-    /// The pipeline graph for this query.
-    pub graph: PipelineGraph,
-
-    /// Error state for this query (per-query isolation).
-    pub error_state: ErrorState,
-
-    /// Number of active sources for this query.
-    pub source_count: usize,
-
-    /// Total number of sources expected for this query (set at deploy time).
-    pub expected_sources: std::sync::atomic::AtomicUsize,
-
-    /// Number of sources that have been successfully started.
-    pub sources_started: std::sync::atomic::AtomicUsize,
-
-    /// Whether this query is in the process of stopping.
-    ///
-    /// When `stop_query()` is called, this flag is set to `true` instead of
-    /// immediately removing the QueryState. This keeps the PipelineGraph alive
-    /// so that cascading StopPipelineTasks can still find the graph to perform
-    /// teardown/flush. The QueryState is only removed once all its pipelines
-    /// have been stopped.
-    pub stopping: AtomicBool,
-}
-
-impl QueryState {
-    /// Create a new query state with the given graph.
-    pub fn new(graph: PipelineGraph) -> Self {
-        Self {
-            graph,
-            error_state: ErrorState::new(),
-            source_count: 0,
-            expected_sources: std::sync::atomic::AtomicUsize::new(0),
-            sources_started: std::sync::atomic::AtomicUsize::new(0),
-            stopping: AtomicBool::new(false),
-        }
-    }
-
-    /// Check if this query is in the process of stopping.
-    pub fn is_stopping(&self) -> bool {
-        self.stopping.load(Ordering::SeqCst)
-    }
-
-    /// Mark this query as stopping.
-    pub fn mark_stopping(&self) {
-        self.stopping.store(true, Ordering::SeqCst);
+impl Default for ErrorState {
+    fn default() -> Self {
+        Self::new()
     }
 }
-
-/// Counter for generating unique query IDs within the executor.
-///
-/// This is separate from the FFI QueryId counter to allow internal query
-/// management during the transition period. The FFI layer will eventually
-/// provide the QueryId when submitting queries.
-static NEXT_EXECUTOR_QUERY_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// Thread-safe handle for submitting tasks to the executor.
 ///
@@ -256,9 +187,12 @@ static NEXT_EXECUTOR_QUERY_ID: std::sync::atomic::AtomicU64 = std::sync::atomic:
 #[derive(Clone)]
 pub struct ExecutorHandle {
     task_queue: Arc<Mutex<Box<dyn TaskQueue>>>,
-    /// Multi-query graph storage: maps QueryId to QueryState.
-    queries: Arc<RwLock<HashMap<QueryId, QueryState>>>,
-    /// Flag set by shutdown() - executor thread pushes Shutdown task when last query completes.
+    /// Single pipeline graph shared by all workers.
+    graph: Arc<RwLock<PipelineGraph>>,
+    /// Error state for the executor (used by commit() in Phase 2).
+    #[allow(dead_code)]
+    error_state: Arc<ErrorState>,
+    /// Flag set by shutdown() - executor thread pushes Shutdown task when last pipeline stops.
     shutting_down: Arc<AtomicBool>,
     /// Condvar to wake worker threads when new tasks are available.
     task_available: Arc<Condvar>,
@@ -279,39 +213,15 @@ impl ExecutorHandle {
     /// # Errors
     ///
     /// Returns `ExecutorError::TaskQueue` if the queue lock cannot be acquired.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use adaptive_engine::executor::Executor;
-    /// # use adaptive_engine::pipeline::{Buffer, PipelineId};
-    /// # let mut executor = Executor::new();
-    /// # let handle = executor.get_handle();
-    /// let buffer = Buffer::new(vec![1, 2, 3]);
-    /// handle.emit(PipelineId::new("pipeline1"), buffer).unwrap();
-    /// ```
     pub fn emit(&self, pipeline_id: PipelineId, buffer: Buffer) -> Result<(), ExecutorError> {
-        // Note: Per-query error checking is done at dequeue time (filter-on-dequeue pattern).
-        // This allows sources to continue emitting buffers even after errors, with cleanup
-        // happening when tasks are processed. This is necessary because sources don't know
-        // their query ID at emit time.
-
         // Look up the pipeline node from the graph, increment pending, and get a Weak ref
         let node_weak = {
-            let queries = self
-                .queries
+            let graph = self
+                .graph
                 .read()
-                .map_err(|e| ExecutorError::TaskQueue(format!("Queries lock poisoned: {}", e)))?;
+                .map_err(|e| ExecutorError::TaskQueue(format!("Graph lock poisoned: {}", e)))?;
 
-            let mut found_node: Option<&Arc<PipelineNode>> = None;
-            for query_state in queries.values() {
-                if let Some(node) = query_state.graph.get_node(&pipeline_id) {
-                    found_node = Some(node);
-                    break;
-                }
-            }
-
-            if let Some(node) = found_node {
+            if let Some(node) = graph.get_node(&pipeline_id) {
                 node.metadata().increment_pending();
                 Arc::downgrade(node)
             } else {
@@ -329,7 +239,6 @@ impl ExecutorHandle {
                 .map_err(|e| ExecutorError::TaskQueue(format!("Queue lock poisoned: {}", e)))?;
 
             queue.push(Task::WorkTask {
-                query_id: 0, // TODO: US-006 will add proper multi-query tracking
                 pipeline_id,
                 node: node_weak,
                 buffer,
@@ -342,51 +251,25 @@ impl ExecutorHandle {
 
     /// Deploy a new pipeline graph.
     ///
-    /// Replaces the current graph with a new one. This operation is atomic
-    /// from the perspective of the execution thread.
+    /// Enqueues a DeployGraph task that will merge the new graph's pipelines
+    /// into the executor's single graph. This operation is processed by the
+    /// execution thread.
     ///
     /// # Arguments
     ///
-    /// * `graph` - The new pipeline graph to deploy
+    /// * `graph` - The pipeline graph to deploy
     ///
     /// # Errors
     ///
     /// Returns `ExecutorError::TaskQueue` if the queue lock cannot be acquired.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use adaptive_engine::executor::Executor;
-    /// # use adaptive_engine::graph::PipelineGraph;
-    /// # let mut executor = Executor::new();
-    /// # let handle = executor.get_handle();
-    /// let graph = PipelineGraph::new();
-    /// handle.deploy_graph(graph).unwrap();
-    /// ```
     pub fn deploy_graph(&self, graph: PipelineGraph) -> Result<(), ExecutorError> {
-        self.deploy_graph_with_query_id(0, graph)
-    }
-
-    /// Deploy a graph with a specific query ID.
-    ///
-    /// This is used by the FFI layer to pass the externally-generated query ID
-    /// so that stop_query() can look up queries by the same ID.
-    pub fn deploy_graph_with_query_id(
-        &self,
-        query_id: QueryId,
-        graph: PipelineGraph,
-    ) -> Result<(), ExecutorError> {
-        // Note: Deploying a new graph doesn't check error state.
-        // Each query has isolated error state, so a new query can always be deployed
-        // even if existing queries have errors.
-
         {
             let mut queue = self
                 .task_queue
                 .lock()
                 .map_err(|e| ExecutorError::TaskQueue(format!("Queue lock poisoned: {}", e)))?;
 
-            queue.push(Task::DeployGraph { graph, query_id });
+            queue.push(Task::DeployGraph { graph });
         }
 
         self.task_available.notify_all();
@@ -407,28 +290,11 @@ impl ExecutorHandle {
     /// # Errors
     ///
     /// Returns `ExecutorError::TaskQueue` if the queue lock cannot be acquired.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use adaptive_engine::executor::Executor;
-    /// # use adaptive_engine::pipeline::PipelineId;
-    /// # let mut executor = Executor::new();
-    /// # let handle = executor.get_handle();
-    /// let source_id = PipelineId::new("source1");
-    /// let pipeline_id = PipelineId::new("pipeline1");
-    ///
-    /// // After emitting all buffers
-    /// handle.end_of_stream(source_id, pipeline_id).unwrap();
-    /// ```
     pub fn end_of_stream(
         &self,
         source_id: PipelineId,
         pipeline_id: PipelineId,
     ) -> Result<(), ExecutorError> {
-        // Note: Per-query error checking is done at dequeue time (filter-on-dequeue pattern).
-        // EOS signals are still enqueued even if query has errors, to ensure proper cleanup.
-
         {
             let mut queue = self
                 .task_queue
@@ -436,7 +302,6 @@ impl ExecutorHandle {
                 .map_err(|e| ExecutorError::TaskQueue(format!("Queue lock poisoned: {}", e)))?;
 
             queue.push(Task::EndOfStream {
-                query_id: 0, // TODO: US-006 will add proper multi-query tracking
                 source_id,
                 pipeline_id,
             });
@@ -446,86 +311,49 @@ impl ExecutorHandle {
         Ok(())
     }
 
-    /// Stop a specific query and remove it from the executor.
+    /// Stop specific pipelines by enqueuing StopPipelineTask for each source.
     ///
-    /// This method stops only the specified query, leaving other queries running.
-    /// The query's pipelines will be gracefully stopped by enqueueing StopPipelineTask
-    /// for each source pipeline, which triggers cascading shutdown through the DAG.
+    /// This initiates cascading shutdown through the DAG starting from the given
+    /// source pipeline IDs. Used by the Engine layer to implement stop_query().
     ///
     /// # Arguments
     ///
-    /// * `query_id` - The ID of the query to stop
-    ///
-    /// # Returns
-    ///
-    /// Returns `true` if the query was found and stop was initiated, `false` if the
-    /// query ID was not found.
+    /// * `source_ids` - IDs of the source pipelines to stop
     ///
     /// # Errors
     ///
     /// Returns `ExecutorError::TaskQueue` if the locks are poisoned.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use adaptive_engine::Executor;
-    /// # use adaptive_engine::graph::PipelineGraph;
-    /// let executor = Executor::new();
-    /// let handle = executor.get_handle();
-    ///
-    /// // Submit a query...
-    /// # handle.deploy_graph(PipelineGraph::new()).unwrap();
-    ///
-    /// // Stop only that query (other queries continue)
-    /// let stopped = handle.stop_query(1).unwrap();
-    /// ```
-    pub fn stop_query(&self, query_id: QueryId) -> Result<bool, ExecutorError> {
-        // Take a read lock to check the query and mark it as stopping.
-        // We do NOT remove the QueryState yet - it must stay alive so that
-        // cascading StopPipelineTasks can find the graph for teardown/flush.
-        let queries = self
-            .queries
-            .read()
-            .map_err(|e| ExecutorError::TaskQueue(format!("Queries lock poisoned: {}", e)))?;
+    pub fn stop_pipelines(&self, source_ids: &[PipelineId]) -> Result<(), ExecutorError> {
+        // Set source stop flags so source threads terminate
+        {
+            let graph = self
+                .graph
+                .read()
+                .map_err(|e| ExecutorError::TaskQueue(format!("Graph lock poisoned: {}", e)))?;
 
-        // Check if the query exists
-        let Some(query_state) = queries.get(&query_id) else {
-            return Ok(false);
-        };
-
-        // Mark the query as stopping (prevents new WorkTasks from being processed)
-        query_state.mark_stopping();
-
-        // Get the source pipelines
-        let source_ids: Vec<PipelineId> = query_state.graph.get_sources();
-
-        // Set source stop flags so CppSourceAdapter threads terminate.
-        for source_id in &source_ids {
-            if let Some(node) = query_state.graph.get_node(source_id) {
-                node.metadata().request_source_stop();
+            for source_id in source_ids {
+                if let Some(node) = graph.get_node(source_id) {
+                    node.metadata().request_source_stop();
+                }
             }
         }
 
-        // Drop the read lock before acquiring the queue lock
-        drop(queries);
-
-        // Get task queue lock
+        // Enqueue StopPipelineTask for each source
         {
             let mut queue = self
                 .task_queue
                 .lock()
                 .map_err(|e| ExecutorError::TaskQueue(format!("Queue lock poisoned: {}", e)))?;
 
-            // Enqueue StopPipelineTask for each source to initiate cascading shutdown
             for source_id in source_ids {
                 queue.push(Task::StopPipelineTask {
-                    pipeline_id: source_id,
+                    pipeline_id: source_id.clone(),
                 });
             }
         }
 
         self.task_available.notify_all();
-        Ok(true)
+        Ok(())
     }
 
     /// Shutdown the executor and stop all active pipelines gracefully.
@@ -537,35 +365,17 @@ impl ExecutorHandle {
     /// # Errors
     ///
     /// Returns `ExecutorError::TaskQueue` if the task queue lock is poisoned.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use adaptive_engine::Executor;
-    /// # use adaptive_engine::graph::PipelineGraph;
-    /// let executor = Executor::new();
-    /// let handle = executor.get_handle();
-    ///
-    /// // Deploy and use...
-    /// # handle.deploy_graph(PipelineGraph::new()).unwrap();
-    ///
-    /// // Shutdown with automatic cleanup
-    /// handle.shutdown().unwrap();
-    /// ```
     pub fn shutdown(&self) -> Result<(), ExecutorError> {
         self.shutting_down.store(true, Ordering::SeqCst);
 
-        // Collect sources from all active queries
+        // Collect sources from the graph
         let all_sources: Vec<PipelineId> = {
-            let queries = self
-                .queries
+            let graph = self
+                .graph
                 .read()
-                .map_err(|e| ExecutorError::TaskQueue(format!("Queries lock poisoned: {}", e)))?;
+                .map_err(|e| ExecutorError::TaskQueue(format!("Graph lock poisoned: {}", e)))?;
 
-            queries
-                .values()
-                .flat_map(|qs| qs.graph.get_sources())
-                .collect()
+            graph.get_sources()
         };
 
         {
@@ -575,7 +385,7 @@ impl ExecutorHandle {
                 .map_err(|e| ExecutorError::TaskQueue(format!("Queue lock poisoned: {}", e)))?;
 
             if all_sources.is_empty() {
-                // No active queries - enqueue Shutdown immediately
+                // No active pipelines - enqueue Shutdown immediately
                 queue.push(Task::Shutdown);
             } else {
                 // Enqueue StopPipelineTask for each source
@@ -591,6 +401,11 @@ impl ExecutorHandle {
         self.task_available.notify_all();
         Ok(())
     }
+
+    /// Get a read lock on the graph. Used by Engine layer for query tracking.
+    pub fn graph(&self) -> &Arc<RwLock<PipelineGraph>> {
+        &self.graph
+    }
 }
 
 /// Shared state accessible by all worker threads.
@@ -598,8 +413,10 @@ impl ExecutorHandle {
 /// Contains all `Arc`-wrapped state and all task-execution methods.
 /// Methods take `&self` and a `worker_id` parameter.
 pub(crate) struct ExecutorShared {
-    /// Multi-query graph storage: maps QueryId to QueryState.
-    queries: Arc<RwLock<HashMap<QueryId, QueryState>>>,
+    /// Single pipeline graph shared by all workers.
+    graph: Arc<RwLock<PipelineGraph>>,
+    /// Error state for the executor.
+    error_state: Arc<ErrorState>,
     task_queue: Arc<Mutex<Box<dyn TaskQueue>>>,
     /// Handle for the delayed task submitter (for repeat_task re-queueing)
     delayed_submitter_handle: Option<DelayedTaskSubmitterHandle>,
@@ -607,7 +424,7 @@ pub(crate) struct ExecutorShared {
     stats_sender: stats::StatisticsSender,
     /// Counter for generating unique task IDs
     next_task_id: AtomicU64,
-    /// Flag set by shutdown() - executor thread pushes Shutdown task when last query completes.
+    /// Flag set by shutdown() - executor thread pushes Shutdown task when graph is empty.
     shutting_down: Arc<AtomicBool>,
     /// Condvar to wake worker threads when new tasks are available.
     task_available: Arc<Condvar>,
@@ -644,12 +461,18 @@ impl ExecutorShared {
     fn execute_work_task(
         &self,
         worker_id: usize,
-        query_id: QueryId,
         pipeline_id: &PipelineId,
         node: Arc<PipelineNode>,
         buffer: Buffer,
         stats: &mut ExecutionStats,
     ) {
+        // Check if pipeline has been marked as failed — skip if so
+        if node.metadata().is_failed() {
+            stats.tasks_skipped += 1;
+            self.decrement_ref_and_check_stop(&node, pipeline_id, stats);
+            return;
+        }
+
         // Check that setup succeeded (direct atomic read, no lock)
         if !node.metadata().is_setup_succeeded() {
             // Pipeline hasn't completed setup - skip this task
@@ -657,36 +480,14 @@ impl ExecutorShared {
             return;
         }
 
-        // Read-lock the queries and find the graph for this query
-        let queries_guard = self.queries.read().unwrap();
-
-        // Look up by query_id, or search for the query owning this pipeline if query_id is 0
-        let query_state = if query_id == 0 {
-            queries_guard
-                .values()
-                .find(|qs| qs.graph.get_pipeline(pipeline_id).is_some())
-        } else {
-            queries_guard.get(&query_id)
-        };
-
-        let Some(query_state) = query_state else {
-            eprintln!(
-                "Error: No graph deployed for work task (query_id={})",
-                query_id
-            );
-            stats.errors_encountered += 1;
-            drop(queries_guard);
-            self.decrement_ref_and_check_stop(&node, pipeline_id, stats);
-            return;
-        };
-        let graph = &query_state.graph;
+        // Read-lock the graph
+        let graph_guard = self.graph.read().unwrap();
 
         // Check if this is a source node
-        if graph.is_source(pipeline_id) {
+        if graph_guard.is_source(pipeline_id) {
             // Sources don't execute - just route buffers directly to successors
-            // Note: Sources don't use pending task reference counting, so no decrement needed
             stats.buffers_processed += 1;
-            self.route_buffers(pipeline_id, vec![buffer], graph, query_id);
+            self.route_buffers(pipeline_id, vec![buffer], &graph_guard);
             return;
         }
 
@@ -696,11 +497,9 @@ impl ExecutorShared {
         // Create channel for context-emitted buffers
         let (emit_tx, emit_rx) = channel();
 
-        // Create execution context with query_id - repeat_task support is always available
-        // (context sets a flag, executor handles re-queueing after execute returns)
-        let context = context::ExecutorContext::with_query_id(
+        // Create execution context
+        let context = context::ExecutorContext::new(
             pipeline_id.clone(),
-            query_id,
             worker_id,
             self.worker_count,
             emit_tx,
@@ -712,7 +511,7 @@ impl ExecutorShared {
         // Emit TaskExecutionStart event
         self.stats_sender.task_execution_start(
             worker_id as u64,
-            query_id,
+            0, // query_id placeholder
             pipeline_id.clone(),
             task_id,
         );
@@ -725,7 +524,7 @@ impl ExecutorShared {
                 // Emit TaskExecutionComplete event
                 self.stats_sender.task_execution_complete(
                     worker_id as u64,
-                    query_id,
+                    0,
                     pipeline_id.clone(),
                     task_id,
                 );
@@ -739,7 +538,6 @@ impl ExecutorShared {
 
                     // Re-enqueue the buffer as-is (no copy, no modification)
                     let repeat_task = Task::WorkTask {
-                        query_id,
                         pipeline_id: pipeline_id.clone(),
                         node: Arc::downgrade(&node),
                         buffer: repeat_buffer,
@@ -774,82 +572,52 @@ impl ExecutorShared {
 
                 // Route all output buffers to successors
                 if !all_buffers.is_empty() {
-                    self.route_buffers_with_stats(
-                        pipeline_id,
-                        all_buffers,
-                        graph,
-                        query_id,
-                        task_id,
-                    );
+                    self.route_buffers_with_stats(pipeline_id, all_buffers, &graph_guard, task_id);
                 }
             }
             Err(e) => {
                 // Emit TaskExecutionComplete event (even on failure)
                 self.stats_sender.task_execution_complete(
                     worker_id as u64,
-                    query_id,
+                    0,
                     pipeline_id.clone(),
                     task_id,
                 );
 
-                // Record error with full context in per-query error state
-                query_state.error_state.record_error(ExecutionError {
+                // Record error
+                self.error_state.record_error(ExecutionError {
                     entity_id: pipeline_id.clone(),
                     entity_type: EntityType::Pipeline,
                     error: e.to_string(),
                     task_type: TaskType::WorkTask,
                 });
 
-                // Log to stderr
-                eprintln!(
-                    "FATAL ERROR: Pipeline {} failed during execution: {}",
-                    pipeline_id, e
-                );
-                eprintln!("Terminating query {} execution immediately", query_id);
+                eprintln!("Pipeline {} failed during execution: {}", pipeline_id, e);
 
-                // Keep counter for backwards compatibility
                 stats.errors_encountered += 1;
 
-                // Release the read lock before terminate_query takes write lock
-                // Find the actual query_id (may be 0 for backward compat)
-                let actual_query_id = if query_id != 0 {
-                    query_id
-                } else {
-                    // Find which query owns this pipeline
-                    let mut found_qid = 0;
-                    for (qid, qs) in queries_guard.iter() {
-                        if qs.graph.get_pipeline(pipeline_id).is_some() {
-                            found_qid = *qid;
-                            break;
-                        }
-                    }
-                    found_qid
-                };
-                drop(queries_guard);
+                // Mark the pipeline as failed so future buffers are skipped
+                node.metadata().mark_failed();
 
-                // Terminate the query (removes metadata, drops pipelines)
-                if actual_query_id != 0 {
-                    self.terminate_query(actual_query_id, stats);
-                }
+                // Emit error event — the query layer will handle stopping the query
+                self.stats_sender
+                    .pipeline_execution_error(worker_id as u64, pipeline_id.clone());
+
+                // Still decrement pending counter for proper lifecycle tracking
+                drop(graph_guard);
+                self.decrement_ref_and_check_stop(&node, pipeline_id, stats);
                 return;
             }
         }
 
         // Always decrement reference count after execution (success path only)
-        drop(queries_guard);
+        drop(graph_guard);
         self.decrement_ref_and_check_stop(&node, pipeline_id, stats);
     }
 
     /// Route output buffers to successor pipelines.
-    fn route_buffers(
-        &self,
-        source_id: &PipelineId,
-        buffers: Vec<Buffer>,
-        graph: &PipelineGraph,
-        query_id: QueryId,
-    ) {
-        // Use default values for statistics (no event emission for source routing)
-        self.route_buffers_internal(source_id, buffers, graph, query_id, None);
+    fn route_buffers(&self, source_id: &PipelineId, buffers: Vec<Buffer>, graph: &PipelineGraph) {
+        self.route_buffers_internal(source_id, buffers, graph, None);
     }
 
     /// Route output buffers to successor pipelines with statistics tracking.
@@ -858,10 +626,9 @@ impl ExecutorShared {
         source_id: &PipelineId,
         buffers: Vec<Buffer>,
         graph: &PipelineGraph,
-        query_id: QueryId,
         task_id: stats::TaskId,
     ) {
-        self.route_buffers_internal(source_id, buffers, graph, query_id, Some(task_id));
+        self.route_buffers_internal(source_id, buffers, graph, Some(task_id));
     }
 
     /// Internal buffer routing with optional statistics.
@@ -870,7 +637,6 @@ impl ExecutorShared {
         source_id: &PipelineId,
         buffers: Vec<Buffer>,
         graph: &PipelineGraph,
-        query_id: QueryId,
         stats_task_id: Option<stats::TaskId>,
     ) {
         let successors = graph.get_successors(source_id);
@@ -883,21 +649,14 @@ impl ExecutorShared {
 
         // Route each buffer to all successors
         for buffer in buffers {
-            // Clone buffer for all successors except the last one
-            for (i, successor_id) in successors.iter().enumerate() {
-                let buffer_to_send = if i == successors.len() - 1 {
-                    // Last successor takes ownership
-                    buffer.clone()
-                } else {
-                    // Others get clones
-                    buffer.clone()
-                };
+            for successor_id in successors.iter() {
+                let buffer_to_send = buffer.clone();
 
                 // Emit TaskEmit event if statistics task_id is provided
                 if let Some(task_id) = stats_task_id {
                     self.stats_sender.task_emit(
                         0,
-                        query_id,
+                        0, // query_id placeholder
                         source_id.clone(),
                         successor_id.clone(),
                         task_id,
@@ -905,25 +664,14 @@ impl ExecutorShared {
                 }
 
                 if let Some(successor_node) = graph.get_node(successor_id) {
-                    self.enqueue_work_task(
-                        query_id,
-                        successor_id.clone(),
-                        successor_node,
-                        buffer_to_send,
-                    );
+                    self.enqueue_work_task(successor_id.clone(), successor_node, buffer_to_send);
                 }
             }
         }
     }
 
     /// Enqueue a work task for a pipeline.
-    fn enqueue_work_task(
-        &self,
-        query_id: QueryId,
-        pipeline_id: PipelineId,
-        node: &Arc<PipelineNode>,
-        buffer: Buffer,
-    ) {
+    fn enqueue_work_task(&self, pipeline_id: PipelineId, node: &Arc<PipelineNode>, buffer: Buffer) {
         // Increment pending task counter (direct atomic, no lock)
         node.metadata().increment_pending();
 
@@ -931,7 +679,6 @@ impl ExecutorShared {
         {
             let mut queue = self.task_queue.lock().unwrap();
             queue.push(Task::WorkTask {
-                query_id,
                 pipeline_id,
                 node: Arc::downgrade(node),
                 buffer,
@@ -941,156 +688,160 @@ impl ExecutorShared {
     }
 
     /// Execute a deploy graph task with automatic pipeline initialization.
-    ///
-    /// Adds the graph to the queries HashMap and returns the assigned QueryId.
     fn execute_deploy_graph(
         &self,
         worker_id: usize,
         graph: PipelineGraph,
-        provided_query_id: QueryId,
         stats: &mut ExecutionStats,
     ) {
-        // Use provided query_id if non-zero, otherwise auto-generate
-        let query_id = if provided_query_id != 0 {
-            provided_query_id
-        } else {
-            NEXT_EXECUTOR_QUERY_ID.fetch_add(1, Ordering::SeqCst)
-        };
-
-        // Get pipeline IDs from the graph before moving it
+        // Get pipeline IDs from the new graph before moving it
         let pipeline_ids = graph.get_all_pipeline_ids();
 
-        // Create QueryState and add to the HashMap
-        let query_state = QueryState::new(graph);
+        // Merge the new graph into the executor's single graph
         {
-            let mut queries = self.queries.write().unwrap();
-            queries.insert(query_id, query_state);
+            let mut main_graph = self.graph.write().unwrap();
+            main_graph.merge(graph);
         }
-
-        // Emit QueryStart event
-        self.stats_sender.query_start(worker_id as u64, query_id);
 
         // Auto-start all pipelines in the new graph
         let mut setup_failed = false;
         let mut successfully_setup: Vec<PipelineId> = Vec::new();
 
         {
-            let queries_guard = self.queries.read().unwrap();
-            if let Some(query_state) = queries_guard.get(&query_id) {
-                let graph = &query_state.graph;
+            let graph_guard = self.graph.read().unwrap();
 
-                for pipeline_id in &pipeline_ids {
-                    // Configure expected sources on the node's metadata
-                    let expected_sources = graph.count_predecessors(pipeline_id);
-                    if let Some(node) = graph.get_node(pipeline_id) {
-                        node.metadata().set_expected_sources(expected_sources);
+            for pipeline_id in &pipeline_ids {
+                // Skip if pipeline wasn't actually added (e.g. duplicate)
+                if graph_guard.get_node(pipeline_id).is_none() {
+                    continue;
+                }
+
+                // Configure expected sources on the node's metadata
+                let expected_sources = graph_guard.count_predecessors(pipeline_id);
+                if let Some(node) = graph_guard.get_node(pipeline_id) {
+                    node.metadata().set_expected_sources(expected_sources);
+                }
+
+                // Call setup() on the pipeline
+                if let Some(pipeline) = graph_guard.get_pipeline(pipeline_id) {
+                    // Create context for setup
+                    let (emit_tx, _emit_rx) = channel();
+                    let context = context::ExecutorContext::new(
+                        pipeline_id.clone(),
+                        worker_id,
+                        self.worker_count,
+                        emit_tx,
+                    );
+
+                    match pipeline.setup(&context) {
+                        Ok(()) => {
+                            if let Some(node) = graph_guard.get_node(pipeline_id) {
+                                node.metadata().mark_setup_succeeded();
+                            }
+                            successfully_setup.push(pipeline_id.clone());
+                            stats.pipelines_started += 1;
+
+                            // Emit PipelineStart event
+                            self.stats_sender.pipeline_start(
+                                worker_id as u64,
+                                0,
+                                pipeline_id.clone(),
+                            );
+                        }
+                        Err(e) => {
+                            // Record setup failure
+                            self.error_state.record_error(ExecutionError {
+                                entity_id: pipeline_id.clone(),
+                                entity_type: EntityType::Pipeline,
+                                error: e.to_string(),
+                                task_type: TaskType::DeployGraph,
+                            });
+
+                            eprintln!("FATAL ERROR: Pipeline {} setup failed: {}", pipeline_id, e);
+                            eprintln!("Terminating execution immediately");
+
+                            stats.errors_encountered += 1;
+                            setup_failed = true;
+                            break;
+                        }
                     }
+                }
+            }
 
-                    // Call setup() on the pipeline
-                    if let Some(pipeline) = graph.get_pipeline(pipeline_id) {
-                        // Create context for setup
+            // Only enqueue StartSource tasks if no setup failed
+            if !setup_failed {
+                let source_ids: Vec<PipelineId> = pipeline_ids
+                    .iter()
+                    .filter(|id| graph_guard.is_source(id))
+                    .cloned()
+                    .collect();
+
+                for source_id in source_ids {
+                    let task = Task::StartSource { source_id };
+                    self.task_queue.lock().unwrap().push(task);
+                }
+                self.task_available.notify_all();
+            }
+        }
+
+        // If setup failed, teardown already-setup pipelines and remove the deployment
+        if setup_failed {
+            // Teardown pipelines that were successfully set up (in reverse order)
+            {
+                let graph_guard = self.graph.read().unwrap();
+                for pid in successfully_setup.iter().rev() {
+                    if let Some(pipeline) = graph_guard.get_pipeline(pid) {
                         let (emit_tx, _emit_rx) = channel();
                         let context = context::ExecutorContext::new(
-                            pipeline_id.clone(),
+                            pid.clone(),
                             worker_id,
                             self.worker_count,
                             emit_tx,
                         );
-
-                        match pipeline.setup(&context) {
-                            Ok(()) => {
-                                if let Some(node) = graph.get_node(pipeline_id) {
-                                    node.metadata().mark_setup_succeeded();
-                                }
-                                successfully_setup.push(pipeline_id.clone());
-                                stats.pipelines_started += 1;
-
-                                // Emit PipelineStart event
-                                self.stats_sender.pipeline_start(
-                                    worker_id as u64,
-                                    query_id,
-                                    pipeline_id.clone(),
-                                );
-                            }
-                            Err(e) => {
-                                // Record setup failure in per-query error state
-                                query_state.error_state.record_error(ExecutionError {
-                                    entity_id: pipeline_id.clone(),
-                                    entity_type: EntityType::Pipeline,
-                                    error: e.to_string(),
-                                    task_type: TaskType::DeployGraph,
-                                });
-
-                                eprintln!(
-                                    "FATAL ERROR: Pipeline {} setup failed: {}",
-                                    pipeline_id, e
-                                );
-                                eprintln!("Terminating query {} execution immediately", query_id);
-
-                                stats.errors_encountered += 1;
-                                setup_failed = true;
-                                break; // Stop setting up more pipelines
-                            }
+                        if let Err(e) = pipeline.teardown(&context) {
+                            eprintln!("Error during teardown for {}: {}", pid, e);
                         }
                     }
                 }
 
-                // Only enqueue StartSource tasks if no setup failed
-                if !setup_failed {
-                    let source_ids: Vec<PipelineId> = graph
-                        .get_all_pipeline_ids()
-                        .into_iter()
-                        .filter(|id| graph.is_source(id))
-                        .collect();
-
-                    // Set expected source count for QueryRunning tracking
-                    if let Some(qs) = queries_guard.get(&query_id) {
-                        qs.expected_sources
-                            .store(source_ids.len(), Ordering::SeqCst);
+                // Also teardown source nodes that weren't set up yet (HashMap
+                // iteration order is non-deterministic, so a source might not
+                // have been reached before the failure).
+                for pid in &pipeline_ids {
+                    if !successfully_setup.contains(pid) && graph_guard.is_source(pid) {
+                        if let Some(source_pipeline) = graph_guard.get_source_pipeline(pid) {
+                            let _ = source_pipeline.source().teardown();
+                        }
                     }
-
-                    if source_ids.is_empty() {
-                        // No sources - query is immediately "running"
-                        self.stats_sender.query_running(worker_id as u64, query_id);
-                    }
-
-                    for source_id in source_ids {
-                        let task = Task::StartSource {
-                            query_id,
-                            source_id,
-                        };
-                        self.task_queue.lock().unwrap().push(task);
-                    }
-                    self.task_available.notify_all();
                 }
             }
-        }
 
-        // If setup failed, teardown already-setup pipelines and terminate query
-        if setup_failed {
-            // Teardown pipelines that were successfully set up (in reverse order)
+            // Remove all pipelines from the failed deployment
             {
-                let queries_guard = self.queries.read().unwrap();
-                if let Some(query_state) = queries_guard.get(&query_id) {
-                    for pid in successfully_setup.iter().rev() {
-                        if let Some(pipeline) = query_state.graph.get_pipeline(pid) {
-                            let (emit_tx, _emit_rx) = channel();
-                            let context = context::ExecutorContext::new(
-                                pid.clone(),
-                                worker_id,
-                                self.worker_count,
-                                emit_tx,
-                            );
-                            if let Err(e) = pipeline.teardown(&context) {
-                                eprintln!("Error during teardown for {}: {}", pid, e);
-                            }
-                        }
+                let mut graph_guard = self.graph.write().unwrap();
+                for pid in &pipeline_ids {
+                    if graph_guard.get_node(pid).is_some() {
+                        graph_guard.remove_node(pid);
                     }
                 }
             }
+            stats.pipelines_stopped += pipeline_ids.len();
 
-            // Terminate the query (removes metadata, drops pipelines)
-            self.terminate_query(query_id, stats);
+            // Emit PipelineStop for each removed pipeline so QueryEngine tracks termination
+            for pid in &pipeline_ids {
+                self.stats_sender
+                    .pipeline_stop(worker_id as u64, 0, pid.clone());
+            }
+
+            // Check if graph is empty for shutdown
+            let graph_empty = {
+                let graph_guard = self.graph.read().unwrap();
+                graph_guard.is_empty()
+            };
+            if graph_empty && self.shutting_down.load(Ordering::SeqCst) {
+                self.task_queue.lock().unwrap().push(Task::Shutdown);
+                self.task_available.notify_all();
+            }
         }
 
         stats.graphs_deployed += 1;
@@ -1103,121 +854,184 @@ impl ExecutorShared {
         pipeline_id: &PipelineId,
         stats: &mut ExecutionStats,
     ) {
-        // 1. Get successors, query_id, and check setup status BEFORE teardown
-        let (successors, should_teardown, query_id) = {
-            let queries_guard = self.queries.read().unwrap();
+        // 1. Get successors and check setup status BEFORE teardown
+        let (successors, should_teardown) = {
+            let graph_guard = self.graph.read().unwrap();
 
-            // Find graph containing this pipeline, and get query_id
-            let mut found_info: Option<(QueryId, &PipelineGraph)> = None;
-            for (qid, query_state) in queries_guard.iter() {
-                if query_state.graph.get_pipeline(pipeline_id).is_some() {
-                    found_info = Some((*qid, &query_state.graph));
-                    break;
-                }
+            if graph_guard.get_pipeline(pipeline_id).is_none() {
+                return;
             }
 
-            let Some((qid, graph)) = found_info else {
-                return;
-            };
-
-            let successors = graph.get_successors(pipeline_id).to_vec();
-            let should_teardown = graph
+            let successors = graph_guard.get_successors(pipeline_id).to_vec();
+            let should_teardown = graph_guard
                 .get_node(pipeline_id)
                 .map(|node| node.metadata().is_setup_succeeded())
                 .unwrap_or(false);
-            (successors, should_teardown, qid)
+            (successors, should_teardown)
         };
 
-        if !should_teardown {
-            // Remove the node from the graph
-            {
-                let mut queries_guard = self.queries.write().unwrap();
-                if let Some(qs) = queries_guard.get_mut(&query_id) {
-                    qs.graph.remove_node(pipeline_id);
+        // Check if pipeline has been marked as failed — skip flush/teardown but still cascade
+        let is_failed = {
+            let graph_guard = self.graph.read().unwrap();
+            graph_guard
+                .get_node(pipeline_id)
+                .map(|node| node.metadata().is_failed())
+                .unwrap_or(false)
+        };
+
+        if !should_teardown || is_failed {
+            // Skip flush/teardown — just stop source if applicable, remove, and cascade
+
+            // If this is a source, stop it and call teardown to clean up resources
+            if is_failed {
+                let graph_guard = self.graph.read().unwrap();
+                if graph_guard.is_source(pipeline_id) {
+                    if let Some(node) = graph_guard.get_node(pipeline_id) {
+                        node.metadata().request_source_stop();
+                    }
+                    if let Some(source_pipeline) = graph_guard.get_source_pipeline(pipeline_id) {
+                        let _ = source_pipeline.stop_source();
+                        let _ = source_pipeline.source().teardown();
+                    }
                 }
             }
+
+            // Propagate failed flag to successors so they also skip flush
+            if is_failed {
+                let graph_guard = self.graph.read().unwrap();
+                for successor_id in &successors {
+                    if let Some(node) = graph_guard.get_node(successor_id) {
+                        node.metadata().mark_failed();
+                    }
+                }
+            }
+
+            // Emit PipelineStop event
+            self.stats_sender
+                .pipeline_stop(worker_id as u64, 0, pipeline_id.clone());
+
+            // Enqueue EndOfStream to all successors (cascade the stop)
+            {
+                let mut queue = self.task_queue.lock().unwrap();
+                for successor_id in successors {
+                    queue.push(Task::EndOfStream {
+                        source_id: pipeline_id.clone(),
+                        pipeline_id: successor_id,
+                    });
+                }
+            }
+            self.task_available.notify_all();
+
+            // Remove the node from the graph
+            {
+                let mut graph_guard = self.graph.write().unwrap();
+                graph_guard.remove_node(pipeline_id);
+            }
             stats.pipelines_stopped += 1;
+
+            // Check if graph is empty for shutdown
+            let graph_empty = {
+                let graph_guard = self.graph.read().unwrap();
+                graph_guard.is_empty()
+            };
+            if graph_empty && self.shutting_down.load(Ordering::SeqCst) {
+                self.task_queue.lock().unwrap().push(Task::Shutdown);
+                self.task_available.notify_all();
+            }
             return;
         }
 
         // 2. Call flush() to get final buffers
         let flush_result: Result<Vec<Buffer>, String> = {
-            let queries_guard = self.queries.read().unwrap();
+            let graph_guard = self.graph.read().unwrap();
 
-            // Find graph containing this pipeline
-            let mut found_graph = None;
-            for query_state in queries_guard.values() {
-                if query_state.graph.get_pipeline(pipeline_id).is_some() {
-                    found_graph = Some(&query_state.graph);
-                    break;
-                }
-            }
+            if let Some(pipeline) = graph_guard.get_pipeline(pipeline_id) {
+                let (emit_tx, emit_rx) = channel();
+                let context = context::ExecutorContext::new(
+                    pipeline_id.clone(),
+                    worker_id,
+                    self.worker_count,
+                    emit_tx,
+                );
 
-            if let Some(graph) = found_graph {
-                if let Some(pipeline) = graph.get_pipeline(pipeline_id) {
-                    // Create context for flush
-                    let (emit_tx, emit_rx) = channel();
-                    let context = context::ExecutorContext::new(
-                        pipeline_id.clone(),
-                        worker_id,
-                        self.worker_count,
-                        emit_tx,
-                    );
-
-                    match pipeline.flush(&context) {
-                        Ok(returned_buffers) => {
-                            // Collect emitted buffers from context
-                            let mut emitted_buffers = Vec::new();
-                            while let Ok((_pid, buf)) = emit_rx.try_recv() {
-                                emitted_buffers.push(buf);
-                            }
-
-                            // Combine returned and emitted buffers
-                            Ok(returned_buffers
-                                .into_iter()
-                                .chain(emitted_buffers)
-                                .collect())
+                match pipeline.flush(&context) {
+                    Ok(returned_buffers) => {
+                        let mut emitted_buffers = Vec::new();
+                        while let Ok((_pid, buf)) = emit_rx.try_recv() {
+                            emitted_buffers.push(buf);
                         }
-                        Err(e) => Err(e.to_string()),
+                        Ok(returned_buffers
+                            .into_iter()
+                            .chain(emitted_buffers)
+                            .collect())
                     }
-                } else {
-                    Ok(vec![])
+                    Err(e) => Err(e.to_string()),
                 }
             } else {
                 Ok(vec![])
             }
         };
 
-        // If flush failed, terminate the query immediately
+        // If flush failed, record error but still cascade the stop to successors
         if let Err(e) = &flush_result {
             eprintln!("Error during flush for {}: {}", pipeline_id, e);
 
-            // Record error in per-query error state
-            {
-                let queries_guard = self.queries.read().unwrap();
-                if let Some(qs) = queries_guard.get(&query_id) {
-                    qs.error_state.record_error(ExecutionError {
-                        entity_id: pipeline_id.clone(),
-                        entity_type: EntityType::Pipeline,
-                        error: e.clone(),
-                        task_type: TaskType::StopPipeline,
-                    });
-                }
-            }
+            self.error_state.record_error(ExecutionError {
+                entity_id: pipeline_id.clone(),
+                entity_type: EntityType::Pipeline,
+                error: e.clone(),
+                task_type: TaskType::StopPipeline,
+            });
 
             stats.errors_encountered += 1;
 
+            // Emit error event for the query layer
+            self.stats_sender
+                .pipeline_execution_error(worker_id as u64, pipeline_id.clone());
+
+            // Mark all successors as failed so they skip flush/stop
+            // when their stop task is processed (cascading failure).
+            {
+                let graph_guard = self.graph.read().unwrap();
+                for successor_id in &successors {
+                    if let Some(node) = graph_guard.get_node(successor_id) {
+                        node.metadata().mark_failed();
+                    }
+                }
+            }
+
+            // Emit PipelineStop
+            self.stats_sender
+                .pipeline_stop(worker_id as u64, 0, pipeline_id.clone());
+
+            // Cascade EndOfStream to successors
+            {
+                let mut queue = self.task_queue.lock().unwrap();
+                for successor_id in successors {
+                    queue.push(Task::EndOfStream {
+                        source_id: pipeline_id.clone(),
+                        pipeline_id: successor_id,
+                    });
+                }
+            }
+            self.task_available.notify_all();
+
             // Remove the node from the graph
             {
-                let mut queries_guard = self.queries.write().unwrap();
-                if let Some(qs) = queries_guard.get_mut(&query_id) {
-                    qs.graph.remove_node(pipeline_id);
-                }
+                let mut graph_guard = self.graph.write().unwrap();
+                graph_guard.remove_node(pipeline_id);
             }
             stats.pipelines_stopped += 1;
 
-            // Terminate the entire query - remaining pipelines are just dropped
-            self.terminate_query(query_id, stats);
+            // Check if graph is empty for shutdown
+            let graph_empty = {
+                let graph_guard = self.graph.read().unwrap();
+                graph_guard.is_empty()
+            };
+            if graph_empty && self.shutting_down.load(Ordering::SeqCst) {
+                self.task_queue.lock().unwrap().push(Task::Shutdown);
+                self.task_available.notify_all();
+            }
             return;
         }
 
@@ -1225,140 +1039,82 @@ impl ExecutorShared {
 
         // 3. Route flushed buffers to successors
         if !flushed_buffers.is_empty() {
-            let queries_guard = self.queries.read().unwrap();
-
-            // Find graph containing this pipeline
-            let mut found_graph = None;
-            for query_state in queries_guard.values() {
-                if query_state.graph.get_pipeline(pipeline_id).is_some() {
-                    found_graph = Some(&query_state.graph);
-                    break;
-                }
-            }
-
-            if let Some(graph) = found_graph {
-                self.route_buffers(pipeline_id, flushed_buffers, graph, query_id);
-            }
+            let graph_guard = self.graph.read().unwrap();
+            self.route_buffers(pipeline_id, flushed_buffers, &graph_guard);
         }
 
         // 3.5. If this is a source pipeline, signal its thread to stop before teardown.
-        // This ensures the source worker thread exits before teardown tries to join it.
         {
-            let queries_guard = self.queries.read().unwrap();
-            if let Some(query_state) = queries_guard
-                .values()
-                .find(|qs| qs.graph.get_pipeline(pipeline_id).is_some())
-            {
-                if query_state.graph.is_source(pipeline_id) {
-                    // Set the stop flag so the source thread's should_stop() returns true
-                    if let Some(node) = query_state.graph.get_node(pipeline_id) {
-                        node.metadata().request_source_stop();
-                    }
-
-                    // Call stop_source() to signal the source
-                    if let Some(source_pipeline) =
-                        query_state.graph.get_source_pipeline(pipeline_id)
-                    {
-                        let _ = source_pipeline.stop_source();
-                    }
+            let graph_guard = self.graph.read().unwrap();
+            if graph_guard.is_source(pipeline_id) {
+                if let Some(node) = graph_guard.get_node(pipeline_id) {
+                    node.metadata().request_source_stop();
+                }
+                if let Some(source_pipeline) = graph_guard.get_source_pipeline(pipeline_id) {
+                    let _ = source_pipeline.stop_source();
                 }
             }
         }
 
-        // 4. Call teardown() - if this fails, record error and terminate the query.
-        //    Supports repeat_task during teardown: if the pipeline calls
-        //    context.repeat_task() during teardown, we call teardown again.
+        // 4. Call teardown()
         let teardown_failed = {
-            let queries_guard = self.queries.read().unwrap();
+            let graph_guard = self.graph.read().unwrap();
 
-            // Find graph containing this pipeline
-            let mut found_graph = None;
-            let mut found_query_state = None;
-            for (_qid, query_state) in queries_guard.iter() {
-                if query_state.graph.get_pipeline(pipeline_id).is_some() {
-                    found_graph = Some(&query_state.graph);
-                    found_query_state = Some(query_state);
-                    break;
-                }
-            }
+            if let Some(pipeline) = graph_guard.get_pipeline(pipeline_id) {
+                let mut failed = false;
+                loop {
+                    let (emit_tx, _emit_rx) = channel();
+                    let context = context::ExecutorContext::new(
+                        pipeline_id.clone(),
+                        worker_id,
+                        self.worker_count,
+                        emit_tx,
+                    );
 
-            if let (Some(graph), Some(query_state)) = (found_graph, found_query_state) {
-                if let Some(pipeline) = graph.get_pipeline(pipeline_id) {
-                    let mut failed = false;
-                    loop {
-                        // Create context for teardown
-                        let (emit_tx, _emit_rx) = channel();
-                        let context = context::ExecutorContext::new(
-                            pipeline_id.clone(),
-                            worker_id,
-                            self.worker_count,
-                            emit_tx,
-                        );
-
-                        match pipeline.teardown(&context) {
-                            Ok(()) => {
-                                // Check if repeat_task was called during teardown
-                                if context.take_repeat_buffer().is_some() {
-                                    // Pipeline wants to be called again
-                                    continue;
-                                }
-                                break;
+                    match pipeline.teardown(&context) {
+                        Ok(()) => {
+                            if context.take_repeat_buffer().is_some() {
+                                continue;
                             }
-                            Err(e) => {
-                                eprintln!(
-                                    "FATAL ERROR: Pipeline {} teardown failed: {}",
-                                    pipeline_id, e
-                                );
-                                eprintln!("Terminating query {} execution immediately", query_id);
+                            break;
+                        }
+                        Err(e) => {
+                            eprintln!("Pipeline {} teardown failed: {}", pipeline_id, e);
 
-                                // Record error in per-query error state
-                                query_state.error_state.record_error(ExecutionError {
-                                    entity_id: pipeline_id.clone(),
-                                    entity_type: EntityType::Pipeline,
-                                    error: e.to_string(),
-                                    task_type: TaskType::StopPipeline,
-                                });
+                            self.error_state.record_error(ExecutionError {
+                                entity_id: pipeline_id.clone(),
+                                entity_type: EntityType::Pipeline,
+                                error: e.to_string(),
+                                task_type: TaskType::StopPipeline,
+                            });
 
-                                stats.errors_encountered += 1;
-                                failed = true;
-                                break;
-                            }
+                            stats.errors_encountered += 1;
+                            failed = true;
+                            break;
                         }
                     }
-                    failed
-                } else {
-                    false
                 }
+                failed
             } else {
                 false
             }
         };
 
         if teardown_failed {
-            // Remove the node from the graph (it already threw during stop)
-            {
-                let mut queries_guard = self.queries.write().unwrap();
-                if let Some(qs) = queries_guard.get_mut(&query_id) {
-                    qs.graph.remove_node(pipeline_id);
-                }
-            }
-            stats.pipelines_stopped += 1;
-
-            // Terminate the entire query - remaining pipelines are just dropped
-            self.terminate_query(query_id, stats);
-            return;
+            // Emit error event for the query layer
+            self.stats_sender
+                .pipeline_execution_error(worker_id as u64, pipeline_id.clone());
         }
 
         // 5. Emit PipelineStop event
         self.stats_sender
-            .pipeline_stop(worker_id as u64, query_id, pipeline_id.clone());
+            .pipeline_stop(worker_id as u64, 0, pipeline_id.clone());
 
         // 6. Enqueue EndOfStream to all successors
         {
             let mut queue = self.task_queue.lock().unwrap();
             for successor_id in successors {
                 queue.push(Task::EndOfStream {
-                    query_id,
                     source_id: pipeline_id.clone(),
                     pipeline_id: successor_id,
                 });
@@ -1368,63 +1124,27 @@ impl ExecutorShared {
 
         // 7. Remove the node from the graph
         {
-            let mut queries_guard = self.queries.write().unwrap();
-            if let Some(qs) = queries_guard.get_mut(&query_id) {
-                qs.graph.remove_node(pipeline_id);
-            }
+            let mut graph_guard = self.graph.write().unwrap();
+            graph_guard.remove_node(pipeline_id);
         }
         stats.pipelines_stopped += 1;
 
-        // 8. Check if this was the last pipeline for the query.
-        // Check per-query pipeline status regardless of whether stop_query() was called.
-        let all_query_pipelines_stopped = {
-            let queries_guard = self.queries.read().unwrap();
-            if let Some(qs) = queries_guard.get(&query_id) {
-                qs.graph.is_empty()
-            } else {
-                false
-            }
+        // 8. Check if graph is empty for shutdown
+        let graph_empty = {
+            let graph_guard = self.graph.read().unwrap();
+            graph_guard.is_empty()
         };
 
-        if all_query_pipelines_stopped {
-            // All pipelines for this query have been torn down.
-            // Note: Sources are NOT stopped/torn down here because each source pipeline
-            // was already torn down by its own StopPipelineTask (which calls
-            // Pipeline::teardown -> Source::teardown, joining the source thread).
-            // Calling stop_source()/teardown() again would be redundant and racy —
-            // it causes double source_close() FFI calls that race with the source
-            // thread's own close(), triggering a crash in NesSourceHandle::close()
-            // which uses a non-atomic bool guard.
-
-            // Remove QueryState from the HashMap.
-            // With multiple workers, two workers may process the last two pipelines
-            // concurrently and both observe all_query_pipelines_stopped == true.
-            // Use the write lock + remove return value to ensure only one worker
-            // performs the query cleanup and emits stats events.
-            let mut queries_guard = self.queries.write().unwrap();
-            let removed = queries_guard.remove(&query_id);
-
-            if removed.is_some() {
-                // Emit QueryStop event
-                self.stats_sender.query_stop(worker_id as u64, query_id);
-                // Emit QueryTerminated event
-                self.stats_sender
-                    .query_terminated(worker_id as u64, query_id);
-
-                // If engine is shutting down and all queries are done, push Shutdown
-                if self.shutting_down.load(Ordering::SeqCst) && queries_guard.is_empty() {
-                    self.task_queue.lock().unwrap().push(Task::Shutdown);
-                    self.task_available.notify_all();
-                }
+        if graph_empty {
+            // If engine is shutting down and graph is empty, push Shutdown
+            if self.shutting_down.load(Ordering::SeqCst) {
+                self.task_queue.lock().unwrap().push(Task::Shutdown);
+                self.task_available.notify_all();
             }
         }
     }
 
     /// Execute a start source task.
-    ///
-    /// This method is called to start a source node after all pipelines have
-    /// been set up. It creates a SourceEmitHandle for the source and calls
-    /// the source's start() method.
     fn execute_start_source_task(
         &self,
         worker_id: usize,
@@ -1433,28 +1153,17 @@ impl ExecutorShared {
     ) {
         use crate::source::SourceEmitHandle;
 
-        // Get the source pipeline and its query state from any query graph
-        let queries_guard = self.queries.read().unwrap();
+        let graph_guard = self.graph.read().unwrap();
 
-        // Find graph containing this source, keeping reference to query_state for error recording
-        let mut found = None;
-        for (qid, query_state) in queries_guard.iter() {
-            if let Some(pipeline) = query_state.graph.get_source_pipeline(source_id) {
-                found = Some((*qid, pipeline, query_state));
-                break;
-            }
-        }
-
-        let Some((query_id, source_pipeline, query_state)) = found else {
-            eprintln!("Source {} not found in any graph", source_id);
+        let Some(source_pipeline) = graph_guard.get_source_pipeline(source_id) else {
+            eprintln!("Source {} not found in graph", source_id);
             stats.errors_encountered += 1;
             return;
         };
 
-        // Get the shared stop flag and Weak ref from the node's metadata so stop_query()
-        // can signal the source thread to stop in real-time
+        // Get the shared stop flag and Weak ref from the node's metadata
         let (stop_flag, node_weak) = {
-            if let Some(node) = query_state.graph.get_node(source_id) {
+            if let Some(node) = graph_guard.get_node(source_id) {
                 (node.metadata().get_source_stop_flag(), Arc::downgrade(node))
             } else {
                 eprintln!("Node for source {} not found", source_id);
@@ -1463,10 +1172,9 @@ impl ExecutorShared {
             }
         };
 
-        // Create SourceEmitHandle with the correct query_id for work task routing
+        // Create SourceEmitHandle (no query_id)
         let emit_handle = SourceEmitHandle::new(
             source_id.clone(),
-            query_id,
             node_weak,
             self.task_queue.clone(),
             stop_flag,
@@ -1476,100 +1184,82 @@ impl ExecutorShared {
         // Start the source
         match source_pipeline.start_source(emit_handle) {
             Ok(()) => {
-                if let Some(node) = query_state.graph.get_node(source_id) {
+                if let Some(node) = graph_guard.get_node(source_id) {
                     node.metadata().mark_source_started();
                 }
 
-                // Track sources started for QueryRunning event
-                let prev = query_state.sources_started.fetch_add(1, Ordering::SeqCst);
-                let expected = query_state.expected_sources.load(Ordering::SeqCst);
-                if expected > 0 && prev + 1 >= expected {
-                    // All sources started - query is now fully operational
-                    self.stats_sender.query_running(worker_id as u64, query_id);
-                }
+                // Notify QueryEngine that this source has started
+                self.stats_sender
+                    .source_started(worker_id as u64, source_id.clone());
             }
             Err(e) => {
-                // Record error with full context in per-query error state
-                query_state.error_state.record_error(ExecutionError {
+                // Record error
+                self.error_state.record_error(ExecutionError {
                     entity_id: source_id.clone(),
                     entity_type: EntityType::Source,
                     error: e.to_string(),
                     task_type: TaskType::StartSource,
                 });
 
-                // Log to stderr
-                eprintln!("FATAL ERROR: Source {} failed to start: {}", source_id, e);
-                eprintln!("Terminating query {} execution immediately", query_id);
+                eprintln!("Source {} failed to start: {}", source_id, e);
 
-                // Keep counter for backwards compatibility
                 stats.errors_encountered += 1;
 
-                // Release the read lock before terminate_query takes write lock
-                drop(queries_guard);
+                // Mark the source as failed
+                if let Some(node) = graph_guard.get_node(source_id) {
+                    node.metadata().mark_failed();
+                }
 
-                // Terminate the query
-                self.terminate_query(query_id, stats);
+                // Emit error event — the query layer will handle stopping the query
+                self.stats_sender
+                    .pipeline_execution_error(worker_id as u64, source_id.clone());
             }
         }
     }
 
     /// Execute a source error task.
-    ///
-    /// Called when a source encounters an error (e.g., C++ source throws during
-    /// next_buffer). Records the error and terminates the query.
     fn execute_source_error_task(
         &self,
-        query_id: QueryId,
+        worker_id: usize,
         source_id: &PipelineId,
         error: &str,
         stats: &mut ExecutionStats,
     ) {
-        // Find the query and record the error
-        let actual_query_id = {
-            let queries_guard = self.queries.read().unwrap();
-
-            // Find the query either by ID or by searching for the source
-            let found = if query_id != 0 {
-                queries_guard.get(&query_id).map(|qs| (query_id, qs))
-            } else {
-                // Search all queries for one containing this source
-                queries_guard.iter().find_map(|(qid, qs)| {
-                    if qs.graph.get_pipeline(source_id).is_some() {
-                        Some((*qid, qs))
-                    } else {
-                        None
-                    }
-                })
-            };
-
-            if let Some((qid, query_state)) = found {
-                // Record the error
-                query_state.error_state.record_error(ExecutionError {
-                    entity_id: source_id.clone(),
-                    entity_type: EntityType::Source,
-                    error: error.to_string(),
-                    task_type: TaskType::StartSource, // Closest match for source runtime errors
-                });
-
-                eprintln!("FATAL ERROR: Source {} failed: {}", source_id, error);
-                eprintln!("Terminating query {} execution immediately", qid);
-
-                stats.errors_encountered += 1;
-                qid
-            } else {
-                // Query already terminated
+        // Check if the source still exists
+        {
+            let graph_guard = self.graph.read().unwrap();
+            if graph_guard.get_pipeline(source_id).is_none() {
+                // Source already terminated
                 return;
             }
-        };
+        }
 
-        // Terminate the query
-        self.terminate_query(actual_query_id, stats);
+        // Record the error
+        self.error_state.record_error(ExecutionError {
+            entity_id: source_id.clone(),
+            entity_type: EntityType::Source,
+            error: error.to_string(),
+            task_type: TaskType::StartSource,
+        });
+
+        eprintln!("Source {} failed: {}", source_id, error);
+
+        stats.errors_encountered += 1;
+
+        // Mark the source node as failed
+        {
+            let graph_guard = self.graph.read().unwrap();
+            if let Some(node) = graph_guard.get_node(source_id) {
+                node.metadata().mark_failed();
+            }
+        }
+
+        // Emit error event — the query layer will handle stopping the query
+        self.stats_sender
+            .pipeline_execution_error(worker_id as u64, source_id.clone());
     }
 
     /// Execute an end-of-stream task.
-    ///
-    /// Performs EOS counting, termination request, and stop-check using
-    /// atomic operations on the node's metadata.
     fn execute_eos_task(
         &self,
         _source_id: &PipelineId,
@@ -1577,20 +1267,15 @@ impl ExecutorShared {
         _stats: &mut ExecutionStats,
     ) {
         let should_stop = {
-            let queries_guard = self.queries.read().unwrap();
-            let node = queries_guard
-                .values()
-                .find_map(|qs| qs.graph.get_node(pipeline_id));
+            let graph_guard = self.graph.read().unwrap();
+            let node = graph_guard.get_node(pipeline_id);
 
             if let Some(node) = node {
                 let meta = node.metadata();
-                // Increment EOS counter
                 let eos_count = meta.increment_eos();
                 let expected = meta.get_expected_sources();
 
-                // Check if all sources have finished
                 if expected > 0 && eos_count >= expected {
-                    // All sources finished - mark for termination and check if ready
                     meta.request_termination();
                     meta.should_terminate()
                         && meta.get_pending() == 0
@@ -1621,8 +1306,6 @@ impl ExecutorShared {
     }
 
     /// Decrement reference count and check if pipeline should be stopped.
-    ///
-    /// Uses atomic operations on the node's metadata (no locks needed).
     fn decrement_ref_and_check_stop(
         &self,
         node: &Arc<PipelineNode>,
@@ -1650,160 +1333,27 @@ impl ExecutorShared {
         }
     }
 
-    /// Check if a query exists in the executor.
-    ///
-    /// Used for filter-on-dequeue pattern: tasks for stopped/removed queries
-    /// are skipped when dequeued.
-    fn query_exists(&self, query_id: QueryId) -> bool {
-        let queries = self.queries.read().unwrap();
-        queries.contains_key(&query_id)
-    }
-
-    /// Check if a query should accept new work tasks.
-    ///
-    /// Returns `false` if the query doesn't exist, or if it exists but is
-    /// in the stopping state (stop_query was called). Used by filter-on-dequeue
-    /// to skip WorkTasks for queries that are being shut down.
-    fn query_accepts_work(&self, query_id: QueryId) -> bool {
-        let queries = self.queries.read().unwrap();
-        if let Some(qs) = queries.get(&query_id) {
-            !qs.is_stopping()
-        } else {
-            false
-        }
-    }
-
-    /// Terminate a query due to an error.
-    ///
-    /// This removes all pipeline metadata for the query and removes the query
-    /// state from the HashMap. Dropping the QueryState triggers Drop on all
-    /// pipelines, which calls C++ destructors (stage_destroy) but does NOT
-    /// call stop() - this is exactly what the error path tests expect.
-    ///
-    /// CRITICAL: This does NOT call flush()/stop()/teardown() on any pipeline.
-    /// On error, pipelines are just dropped (destroyed).
-    fn terminate_query(&self, query_id: QueryId, stats: &mut ExecutionStats) {
-        // Collect errors and source IDs from the query before modifying state
-        let (pipeline_count, errors, source_ids) = {
-            let queries = self.queries.read().unwrap();
-            let Some(query_state) = queries.get(&query_id) else {
-                return;
-            };
-
-            // Get pipeline count belonging to this query
-            let pipeline_count = query_state.graph.len();
-
-            // Collect errors
-            let errors = query_state.error_state.get_errors();
-
-            // Get source pipeline IDs (need special handling to stop threads)
-            let all_ids = query_state.graph.get_all_pipeline_ids();
-            let source_ids: Vec<PipelineId> = all_ids
-                .iter()
-                .filter(|pid| query_state.graph.is_source(pid))
-                .cloned()
-                .collect();
-
-            // Signal all source stop flags FIRST so worker threads see should_stop() == true.
-            // This must happen before teardown which joins the thread.
-            for source_id in &source_ids {
-                if let Some(node) = query_state.graph.get_node(source_id) {
-                    node.metadata().request_source_stop();
-                }
-            }
-
-            (pipeline_count, errors, source_ids)
-        };
-
-        // Stop all source threads BEFORE removing query state.
-        // This is critical because source threads hold Arc clones of the C++
-        // SourceHandle. If we don't join the threads first, the CppSourceHandle
-        // won't be destroyed (test expects wait_until_destroyed() to succeed).
-        //
-        // Note: We call stop() then teardown() on sources. This sets their
-        // stopped flag, closes the C++ handle (unblocks next_buffer), and
-        // joins the thread. This does NOT call C++ PipelineStage::stop()
-        // (which is what was_stopped() checks) - it only affects the Source trait.
-        {
-            let queries = self.queries.read().unwrap();
-            if let Some(query_state) = queries.get(&query_id) {
-                for source_id in &source_ids {
-                    if let Some(source_pipeline) = query_state.graph.get_source_pipeline(source_id)
-                    {
-                        // Stop the source (signals thread to exit, closes C++ handle)
-                        let _ = source_pipeline.stop_source();
-                        // Teardown joins the thread so Arc ref count drops
-                        let _ = source_pipeline.source().teardown();
-                    }
-                }
-            }
-        }
-
-        stats.pipelines_stopped += pipeline_count;
-
-        // Remove query state (Drop cascade calls stage_destroy, NOT stop)
-        // This also drops all Arc<PipelineNode>s, invalidating all Weak refs.
-        let removed_query = {
-            let mut queries = self.queries.write().unwrap();
-            queries.remove(&query_id)
-        };
-
-        if let Some(_query_state) = removed_query {
-            // Emit QueryStop event
-            self.stats_sender.query_stop(0, query_id);
-            // Emit QueryTerminated event
-            self.stats_sender.query_terminated(0, query_id);
-        }
-
-        // Store errors for later aggregation in stats
-        // We need to push them into stats.errors directly since the query_state
-        // is now removed and won't be aggregated in run()'s final loop
-        stats.errors.extend(errors);
-
-        // If engine is shutting down and all queries are done, push Shutdown
-        if self.shutting_down.load(Ordering::SeqCst) {
-            let queries_empty = self.queries.read().unwrap().is_empty();
-            if queries_empty {
-                self.task_queue.lock().unwrap().push(Task::Shutdown);
-                self.task_available.notify_all();
-            }
-        }
-    }
-
     /// Emergency shutdown - stops all pipelines immediately without cascading.
-    ///
-    /// Used only when Shutdown task is received (e.g., emergency stop or empty graph).
-    /// Normal graceful shutdown uses cascading StopPipelineTasks.
     fn stop_all_pipelines(&self, stats: &mut ExecutionStats) {
-        // Call teardown on each pipeline in all query graphs
-        let queries_guard = self.queries.read().unwrap();
-        for query_state in queries_guard.values() {
-            let pipeline_ids = query_state.graph.get_all_pipeline_ids();
-            for pipeline_id in &pipeline_ids {
-                if let Some(node) = query_state.graph.get_node(pipeline_id) {
-                    // Check if setup succeeded before calling teardown
-                    if node.metadata().is_setup_succeeded() {
-                        // Create context for teardown
-                        let (emit_tx, _emit_rx) = channel();
-                        let context =
-                            context::ExecutorContext::new(pipeline_id.clone(), 0, 1, emit_tx);
+        let graph_guard = self.graph.read().unwrap();
+        let pipeline_ids = graph_guard.get_all_pipeline_ids();
+        for pipeline_id in &pipeline_ids {
+            if let Some(node) = graph_guard.get_node(pipeline_id) {
+                if node.metadata().is_setup_succeeded() {
+                    let (emit_tx, _emit_rx) = channel();
+                    let context = context::ExecutorContext::new(pipeline_id.clone(), 0, 1, emit_tx);
 
-                        if let Err(e) = node.pipeline().teardown(&context) {
-                            eprintln!("Error during pipeline teardown for {}: {}", pipeline_id, e);
-                            stats.errors_encountered += 1;
-                        }
+                    if let Err(e) = node.pipeline().teardown(&context) {
+                        eprintln!("Error during pipeline teardown for {}: {}", pipeline_id, e);
+                        stats.errors_encountered += 1;
                     }
                 }
-                stats.pipelines_stopped += 1;
             }
+            stats.pipelines_stopped += 1;
         }
     }
 
     /// Run the worker loop for a single worker thread.
-    ///
-    /// Pops tasks from the shared queue and dispatches to execute methods.
-    /// Returns when a Shutdown task is processed or `shutting_down` is set
-    /// and the queue is drained.
     fn worker_loop(self: &Arc<Self>, worker_id: usize) -> ExecutionStats {
         let mut stats = ExecutionStats::new();
 
@@ -1815,7 +1365,6 @@ impl ExecutorShared {
 
             let task = self.pop_task();
 
-            // pop_task should always return Some, but guard against edge cases
             let Some(task) = task else {
                 if self.shutdown_complete.load(Ordering::SeqCst) {
                     break;
@@ -1842,7 +1391,6 @@ impl ExecutorShared {
     fn dispatch_task(&self, worker_id: usize, task: Task, stats: &mut ExecutionStats) {
         match task {
             Task::WorkTask {
-                query_id,
                 pipeline_id,
                 node: node_weak,
                 buffer,
@@ -1853,43 +1401,36 @@ impl ExecutorShared {
                     return;
                 };
 
-                // Filter-on-dequeue: skip tasks for stopped/removed/stopping queries
-                // query_id 0 is backward compatibility - always process
-                if query_id != 0 && !self.query_accepts_work(query_id) {
-                    stats.tasks_skipped += 1;
-                    self.decrement_ref_and_check_stop(&node, &pipeline_id, stats);
-                    return;
-                }
-                self.execute_work_task(worker_id, query_id, &pipeline_id, node, buffer, stats);
+                self.execute_work_task(worker_id, &pipeline_id, node, buffer, stats);
                 stats.tasks_executed += 1;
             }
-            Task::DeployGraph { graph, query_id } => {
-                self.execute_deploy_graph(worker_id, graph, query_id, stats);
+            Task::DeployGraph { graph } => {
+                self.execute_deploy_graph(worker_id, graph, stats);
                 stats.tasks_executed += 1;
             }
-            Task::StartSource {
-                query_id,
-                source_id,
-            } => {
-                // Filter-on-dequeue: skip tasks for stopped/removed queries
-                // query_id 0 is backward compatibility - always process
-                if query_id != 0 && !self.query_exists(query_id) {
-                    stats.tasks_skipped += 1;
-                    return;
+            Task::StartSource { source_id } => {
+                // Check if pipeline still exists in graph
+                {
+                    let graph_guard = self.graph.read().unwrap();
+                    if graph_guard.get_node(&source_id).is_none() {
+                        stats.tasks_skipped += 1;
+                        return;
+                    }
                 }
                 self.execute_start_source_task(worker_id, &source_id, stats);
                 stats.tasks_executed += 1;
             }
             Task::EndOfStream {
-                query_id,
                 source_id,
                 pipeline_id,
             } => {
-                // Filter-on-dequeue: skip tasks for stopped/removed queries
-                // query_id 0 is backward compatibility - always process
-                if query_id != 0 && !self.query_exists(query_id) {
-                    stats.tasks_skipped += 1;
-                    return;
+                // Check if pipeline still exists in graph
+                {
+                    let graph_guard = self.graph.read().unwrap();
+                    if graph_guard.get_node(&pipeline_id).is_none() {
+                        stats.tasks_skipped += 1;
+                        return;
+                    }
                 }
                 self.execute_eos_task(&source_id, &pipeline_id, stats);
                 stats.tasks_executed += 1;
@@ -1898,12 +1439,8 @@ impl ExecutorShared {
                 self.execute_stop_task(worker_id, &pipeline_id, stats);
                 stats.tasks_executed += 1;
             }
-            Task::SourceError {
-                query_id,
-                source_id,
-                error,
-            } => {
-                self.execute_source_error_task(query_id, &source_id, &error, stats);
+            Task::SourceError { source_id, error } => {
+                self.execute_source_error_task(worker_id, &source_id, &error, stats);
                 stats.tasks_executed += 1;
             }
             Task::Shutdown => {
@@ -1919,20 +1456,6 @@ impl ExecutorShared {
 /// `Executor` manages shared state and worker threads. When `run()` is called,
 /// it spawns N-1 additional worker threads (for a total of N workers) that
 /// all process tasks from the shared queue.
-///
-/// # DelayedTaskSubmitter Integration
-///
-/// The executor owns a `DelayedTaskSubmitter` that handles `repeat_task()` calls.
-/// When a pipeline calls `context.repeat_task(delay_ms)`, the task is sent to the
-/// submitter thread which sleeps for the delay and then pushes the task back into
-/// the executor's task queue. On shutdown, the executor signals the submitter to
-/// stop and joins its thread.
-///
-/// # Statistics Channel
-///
-/// The executor accepts an optional `StatisticsSender` for emitting execution
-/// lifecycle events. If no sender is provided (or a no-op sender is used),
-/// events are silently discarded with zero overhead.
 pub struct Executor {
     /// Shared state accessible by all worker threads.
     shared: Arc<ExecutorShared>,
@@ -1944,65 +1467,16 @@ pub struct Executor {
 
 impl Executor {
     /// Create a new executor with the default FIFO queue and 1 worker thread.
-    ///
-    /// The executor starts with no graph deployed. Use `deploy_graph()` via
-    /// the handle to deploy a graph before emitting buffers.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::executor::Executor;
-    ///
-    /// let executor = Executor::new();
-    /// ```
     pub fn new() -> Self {
         Self::with_queue(FifoQueue::new())
     }
 
     /// Create a new executor with a custom task queue implementation.
-    ///
-    /// This allows using different queue strategies for testing or
-    /// performance tuning.
-    ///
-    /// # Arguments
-    ///
-    /// * `queue` - The task queue implementation to use
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::executor::{Executor, RandomQueue};
-    ///
-    /// // Use random queue for stress testing
-    /// let executor = Executor::with_queue(RandomQueue::new());
-    /// ```
     pub fn with_queue<Q: TaskQueue + 'static>(queue: Q) -> Self {
         Self::with_queue_and_stats(queue, stats::StatisticsSender::noop())
     }
 
     /// Create a new executor with a custom task queue and statistics sender.
-    ///
-    /// This allows using different queue strategies and collecting execution
-    /// statistics for testing or monitoring.
-    ///
-    /// # Arguments
-    ///
-    /// * `queue` - The task queue implementation to use
-    /// * `stats_sender` - The statistics event sender for observability
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::executor::{Executor, FifoQueue, StatisticsSender, StatisticsEvent};
-    /// use std::sync::mpsc;
-    ///
-    /// // Create channel for statistics
-    /// let (tx, rx) = mpsc::channel::<StatisticsEvent>();
-    /// let sender = StatisticsSender::new(tx);
-    ///
-    /// // Create executor with statistics
-    /// let executor = Executor::with_queue_and_stats(FifoQueue::new(), sender);
-    /// ```
     pub fn with_queue_and_stats<Q: TaskQueue + 'static>(
         queue: Q,
         stats_sender: stats::StatisticsSender,
@@ -2042,7 +1516,8 @@ impl Executor {
             DelayedTaskSubmitter::new(Arc::clone(&task_queue), Arc::clone(&task_available));
 
         let shared = Arc::new(ExecutorShared {
-            queries: Arc::new(RwLock::new(HashMap::new())),
+            graph: Arc::new(RwLock::new(PipelineGraph::new())),
+            error_state: Arc::new(ErrorState::new()),
             task_queue,
             delayed_submitter_handle: Some(delayed_submitter.get_handle()),
             stats_sender,
@@ -2061,23 +1536,11 @@ impl Executor {
     }
 
     /// Get a cloneable handle for submitting tasks.
-    ///
-    /// The handle can be cloned and shared across threads to submit work
-    /// from multiple source threads.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::executor::Executor;
-    ///
-    /// let mut executor = Executor::new();
-    /// let handle = executor.get_handle();
-    /// let handle_clone = handle.clone();
-    /// ```
     pub fn get_handle(&self) -> ExecutorHandle {
         ExecutorHandle {
             task_queue: Arc::clone(&self.shared.task_queue),
-            queries: Arc::clone(&self.shared.queries),
+            graph: Arc::clone(&self.shared.graph),
+            error_state: Arc::clone(&self.shared.error_state),
             shutting_down: Arc::clone(&self.shared.shutting_down),
             task_available: Arc::clone(&self.shared.task_available),
         }
@@ -2089,28 +1552,6 @@ impl Executor {
     /// a `Shutdown` task is received. It spawns N-1 additional worker threads
     /// (for a total of N workers) and returns merged execution statistics
     /// when shutdown is complete.
-    ///
-    /// # Returns
-    ///
-    /// Execution statistics tracking buffers processed, pipelines started/stopped, etc.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use adaptive_engine::executor::Executor;
-    /// use std::thread;
-    ///
-    /// let mut executor = Executor::new();
-    /// let handle = executor.get_handle();
-    ///
-    /// let exec_thread = thread::spawn(move || {
-    ///     executor.run()
-    /// });
-    ///
-    /// // Use handle to submit work...
-    /// handle.shutdown().unwrap();
-    /// let stats = exec_thread.join().unwrap();
-    /// ```
     pub fn run(mut self) -> ExecutionStats {
         let shared = Arc::clone(&self.shared);
 
@@ -2143,20 +1584,13 @@ impl Executor {
             submitter.shutdown();
         }
 
-        // Aggregate errors from all queries into stats
-        {
-            let queries = shared.queries.read().unwrap();
-            for query_state in queries.values() {
-                stats.errors.extend(query_state.error_state.get_errors());
-            }
-        }
+        // Aggregate errors from error state into stats
+        stats.errors.extend(shared.error_state.get_errors());
 
-        // Clear all query state to release pipeline/source resources.
-        // This is critical for FFI: dropping CppPipelineStage/CppSourceHandle
-        // calls C++ destructors (stage_destroy/source_destroy) to free C++ objects.
+        // Clear graph to release pipeline/source resources.
         {
-            let mut queries = shared.queries.write().unwrap();
-            queries.clear();
+            let mut graph_guard = shared.graph.write().unwrap();
+            *graph_guard = PipelineGraph::new();
         }
 
         stats
@@ -2166,28 +1600,6 @@ impl Executor {
     ///
     /// Pops one task from the queue and executes it. Returns true if a task
     /// was executed, false if the queue was empty.
-    ///
-    /// This is useful for step-through testing without spawning a thread.
-    ///
-    /// # Returns
-    ///
-    /// True if a task was executed, false if the queue was empty.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use adaptive_engine::executor::Executor;
-    ///
-    /// let mut executor = Executor::new();
-    /// let handle = executor.get_handle();
-    ///
-    /// // Submit a task
-    /// handle.shutdown().unwrap();
-    ///
-    /// // Execute it
-    /// let executed = executor.run_one();
-    /// assert!(executed);
-    /// ```
     pub fn run_one(&mut self) -> bool {
         let task = {
             let mut queue = self.shared.task_queue.lock().unwrap();
@@ -2202,53 +1614,41 @@ impl Executor {
 
         match task {
             Task::WorkTask {
-                query_id,
                 pipeline_id,
                 node: node_weak,
                 buffer,
             } => {
-                // Try to upgrade the Weak pointer - if it fails, the pipeline was removed
                 let Some(node) = node_weak.upgrade() else {
-                    return true; // Task was "executed" (skipped - pipeline gone)
+                    return true;
                 };
 
-                // Filter-on-dequeue: skip tasks for stopped/removed/stopping queries
-                // query_id 0 is backward compatibility - always process
-                if query_id != 0 && !self.shared.query_accepts_work(query_id) {
-                    // Must decrement pending counter even for skipped tasks
-                    // (see run() loop for detailed explanation).
-                    self.shared
-                        .decrement_ref_and_check_stop(&node, &pipeline_id, &mut stats);
-                    return true; // Task was "executed" (skipped)
-                }
                 self.shared
-                    .execute_work_task(0, query_id, &pipeline_id, node, buffer, &mut stats);
+                    .execute_work_task(0, &pipeline_id, node, buffer, &mut stats);
             }
-            Task::DeployGraph { graph, query_id } => {
-                self.shared
-                    .execute_deploy_graph(0, graph, query_id, &mut stats);
+            Task::DeployGraph { graph } => {
+                self.shared.execute_deploy_graph(0, graph, &mut stats);
             }
-            Task::StartSource {
-                query_id,
-                source_id,
-            } => {
-                // Filter-on-dequeue: skip tasks for stopped/removed queries
-                // query_id 0 is backward compatibility - always process
-                if query_id != 0 && !self.shared.query_exists(query_id) {
-                    return true; // Task was "executed" (skipped)
+            Task::StartSource { source_id } => {
+                // Check if pipeline still exists
+                {
+                    let graph_guard = self.shared.graph.read().unwrap();
+                    if graph_guard.get_node(&source_id).is_none() {
+                        return true;
+                    }
                 }
                 self.shared
                     .execute_start_source_task(0, &source_id, &mut stats);
             }
             Task::EndOfStream {
-                query_id,
                 source_id,
                 pipeline_id,
             } => {
-                // Filter-on-dequeue: skip tasks for stopped/removed queries
-                // query_id 0 is backward compatibility - always process
-                if query_id != 0 && !self.shared.query_exists(query_id) {
-                    return true; // Task was "executed" (skipped)
+                // Check if pipeline still exists
+                {
+                    let graph_guard = self.shared.graph.read().unwrap();
+                    if graph_guard.get_node(&pipeline_id).is_none() {
+                        return true;
+                    }
                 }
                 self.shared
                     .execute_eos_task(&source_id, &pipeline_id, &mut stats);
@@ -2256,13 +1656,9 @@ impl Executor {
             Task::StopPipelineTask { pipeline_id } => {
                 self.shared.execute_stop_task(0, &pipeline_id, &mut stats);
             }
-            Task::SourceError {
-                query_id,
-                source_id,
-                error,
-            } => {
+            Task::SourceError { source_id, error } => {
                 self.shared
-                    .execute_source_error_task(query_id, &source_id, &error, &mut stats);
+                    .execute_source_error_task(0, &source_id, &error, &mut stats);
             }
             Task::Shutdown => {
                 // Stop all active pipelines

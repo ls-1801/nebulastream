@@ -129,9 +129,13 @@ fn test_many_queries_two_sources() {
     let _exec_stats = engine.shutdown();
 }
 
-/// Test 24: ManyQueriesWithTwoSourcesOneSourceFails — query 0 fails, query 1 stopped, rest EOS.
+/// Test 24: Source failure terminates only the failing query — per-query isolation.
+///
+/// When a source in query 0 fails, only query 0's pipelines are stopped.
+/// Other queries continue running and can be individually stopped or
+/// gracefully terminated via EOS.
 #[test]
-fn test_many_queries_source_failure_isolation() {
+fn test_many_queries_source_failure_isolates_query() {
     let (mut engine, receiver) = Engine::with_stats();
     let stats = StatsCollector::new(receiver);
 
@@ -139,7 +143,7 @@ fn test_many_queries_source_failure_isolation() {
 
     let mut queries = Vec::new();
 
-    for i in 0..10 {
+    for i in 0..3 {
         let (graph, s1_ctrl, s2_ctrl, _pipe_ctrl, sink_ctrl) = build_two_source_graph(i);
         let query_id = engine.submit_query(graph).unwrap();
         queries.push((query_id, s1_ctrl, s2_ctrl, sink_ctrl));
@@ -158,117 +162,79 @@ fn test_many_queries_source_failure_isolation() {
         s2_ctrl.inject_buffer(identifiable_buffer(2));
     }
 
-    // Query 0: source 1 fails
-    queries[0].1.inject_error("Query 0 source 1 failure");
+    // Query 0 source 1 fails — only query 0 should be terminated
+    queries[0].1.inject_error("Source failure");
 
-    // Query 1: stopped via stop_query
-    let stopped = engine.stop_query(queries[1].0).unwrap();
-    assert!(stopped);
-
-    // Queries 2-9: graceful via EOS
-    for i in 2..10 {
-        queries[i].1.end_of_stream();
-        queries[i].2.end_of_stream();
-    }
-
-    // Wait for queries 0 and 1 to terminate
+    // Query 0 should be terminated
     assert!(stats.wait_for_query_terminated_id(queries[0].0, DEFAULT_TIMEOUT));
-    assert!(stats.wait_for_query_terminated_id(queries[1].0, DEFAULT_TIMEOUT));
 
-    // Wait for queries 2-9 to terminate
-    for i in 2..10 {
-        assert!(stats.wait_for_query_terminated_id(queries[i].0, DEFAULT_TIMEOUT));
-    }
+    // Query 0's sources should stop
+    assert!(queries[0].1.wait_stopped(DEFAULT_TIMEOUT));
+    assert!(queries[0].2.wait_stopped(DEFAULT_TIMEOUT));
 
-    // All sources should stop
-    for (_, s1_ctrl, s2_ctrl, _) in &queries {
-        assert!(s1_ctrl.wait_stopped(DEFAULT_TIMEOUT));
-        assert!(s2_ctrl.wait_stopped(DEFAULT_TIMEOUT));
-    }
+    // Explicitly stop query 1
+    let stopped = engine.stop_query(queries[1].0).unwrap();
+    assert!(stopped, "Query 1 should have been stopped");
+    assert!(queries[1].1.wait_stopped(DEFAULT_TIMEOUT));
+    assert!(queries[1].2.wait_stopped(DEFAULT_TIMEOUT));
 
-    let _exec_stats = engine.shutdown();
+    // Gracefully terminate query 2 via EOS
+    queries[2].1.end_of_stream();
+    queries[2].2.end_of_stream();
+    assert!(stats.wait_for_query_terminated_id(queries[2].0, DEFAULT_TIMEOUT));
+    assert!(queries[2].1.wait_stopped(DEFAULT_TIMEOUT));
+    assert!(queries[2].2.wait_stopped(DEFAULT_TIMEOUT));
+
+    let exec_stats = engine.shutdown();
+    assert!(exec_stats.has_errors());
 }
 
-/// Test 25: ManyQueriesWithTwoSourcesAndPipelineFailures
-/// Query 0: no failure (EOS), Queries 1-9: pipeline fails on 2nd invocation.
+/// Test 25: Pipeline failure terminates only the failing query — per-query isolation.
+///
+/// When a pipeline in query 1 fails, only query 1 is terminated.
+/// Query 0 continues running and can be gracefully terminated via EOS.
 #[test]
-fn test_many_queries_pipeline_failure_isolation() {
+fn test_many_queries_pipeline_failure_isolates_query() {
     let (mut engine, receiver) = Engine::with_stats();
     let stats = StatsCollector::new(receiver);
 
     engine.start();
 
-    let mut queries = Vec::new();
+    // Query 0: normal (no failure configured)
+    let (graph0, s1_ctrl, s2_ctrl, _pipe_ctrl0, sink_ctrl0) = build_two_source_graph(0);
+    let q0_id = engine.submit_query(graph0).unwrap();
+    assert!(stats.wait_for_query_running_id(q0_id, DEFAULT_TIMEOUT));
+    assert!(s1_ctrl.wait_started(DEFAULT_TIMEOUT));
+    assert!(s2_ctrl.wait_started(DEFAULT_TIMEOUT));
 
-    for i in 0..10 {
-        let (source1, s1_ctrl) = controlled_source(&format!("q{}-source1", i));
-        let (source2, s2_ctrl) = controlled_source(&format!("q{}-source2", i));
-        let (pipeline, pipe_ctrl) = controlled_pipeline(&format!("q{}-pipeline", i));
-        let (sink, sink_ctrl) = capturing_sink(&format!("q{}-sink", i));
+    // Query 1: pipeline fails on 2nd invocation
+    let (graph1, s3_ctrl, s4_ctrl, pipe_ctrl1, _sink_ctrl1) = build_two_source_graph(1);
+    pipe_ctrl1.fail_on_execute_nth(2);
+    let q1_id = engine.submit_query(graph1).unwrap();
+    assert!(stats.wait_for_query_running_id(q1_id, DEFAULT_TIMEOUT));
+    assert!(s3_ctrl.wait_started(DEFAULT_TIMEOUT));
+    assert!(s4_ctrl.wait_started(DEFAULT_TIMEOUT));
 
-        // Queries 1-9: fail on 2nd invocation
-        if i > 0 {
-            pipe_ctrl.fail_on_execute_nth(2);
-        }
+    // Inject data to trigger the failure in query 1
+    s3_ctrl.inject_buffer(identifiable_buffer(1));
+    s4_ctrl.inject_buffer(identifiable_buffer(2));
 
-        let mut graph = PipelineGraph::new();
-        graph.add_source(source1).unwrap();
-        graph.add_source(source2).unwrap();
-        graph.add_pipeline(pipeline).unwrap();
-        graph.add_pipeline(sink).unwrap();
-        graph
-            .connect(
-                &PipelineId::new(format!("q{}-source1", i)),
-                &PipelineId::new(format!("q{}-pipeline", i)),
-            )
-            .unwrap();
-        graph
-            .connect(
-                &PipelineId::new(format!("q{}-source2", i)),
-                &PipelineId::new(format!("q{}-pipeline", i)),
-            )
-            .unwrap();
-        graph
-            .connect(
-                &PipelineId::new(format!("q{}-pipeline", i)),
-                &PipelineId::new(format!("q{}-sink", i)),
-            )
-            .unwrap();
+    // Query 1 should be terminated
+    assert!(stats.wait_for_query_terminated_id(q1_id, DEFAULT_TIMEOUT));
+    assert!(s3_ctrl.wait_stopped(DEFAULT_TIMEOUT));
+    assert!(s4_ctrl.wait_stopped(DEFAULT_TIMEOUT));
 
-        let query_id = engine.submit_query(graph).unwrap();
-        queries.push((query_id, s1_ctrl, s2_ctrl, pipe_ctrl, sink_ctrl));
-    }
+    // Query 0 should still be alive — verify by injecting data and receiving it
+    s1_ctrl.inject_buffer(identifiable_buffer(10));
+    assert!(sink_ctrl0.wait_for_buffers(1, DEFAULT_TIMEOUT));
 
-    // Wait for all to be running
-    for (query_id, s1, s2, _, _) in &queries {
-        assert!(stats.wait_for_query_running_id(*query_id, DEFAULT_TIMEOUT));
-        assert!(s1.wait_started(DEFAULT_TIMEOUT));
-        assert!(s2.wait_started(DEFAULT_TIMEOUT));
-    }
+    // Gracefully terminate query 0 via EOS
+    s1_ctrl.end_of_stream();
+    s2_ctrl.end_of_stream();
+    assert!(stats.wait_for_query_terminated_id(q0_id, DEFAULT_TIMEOUT));
+    assert!(s1_ctrl.wait_stopped(DEFAULT_TIMEOUT));
+    assert!(s2_ctrl.wait_stopped(DEFAULT_TIMEOUT));
 
-    // Inject data: 4 buffers from each source
-    for (_, s1, s2, _, _) in &queries {
-        for j in 1..=4 {
-            s1.inject_buffer(identifiable_buffer(j));
-            s2.inject_buffer(identifiable_buffer(j + 10));
-        }
-    }
-
-    // Queries 1-9 should fail after pipeline invoked 2 times
-    for i in 1..10 {
-        assert!(stats.wait_for_query_terminated_id(queries[i].0, DEFAULT_TIMEOUT));
-    }
-
-    // Query 0: send EOS
-    queries[0].1.end_of_stream();
-    queries[0].2.end_of_stream();
-    assert!(stats.wait_for_query_terminated_id(queries[0].0, DEFAULT_TIMEOUT));
-
-    // All sources should stop
-    for (_, s1, s2, _, _) in &queries {
-        assert!(s1.wait_stopped(DEFAULT_TIMEOUT));
-        assert!(s2.wait_stopped(DEFAULT_TIMEOUT));
-    }
-
-    let _exec_stats = engine.shutdown();
+    let exec_stats = engine.shutdown();
+    assert!(exec_stats.has_errors());
 }

@@ -263,7 +263,6 @@ pub trait Source: Send + Sync {
 #[derive(Clone)]
 pub struct SourceEmitHandle {
     source_id: PipelineId,
-    query_id: u64,
     node: Weak<PipelineNode>,
     task_queue: Arc<Mutex<Box<dyn TaskQueue>>>,
     stop_requested: Arc<AtomicBool>,
@@ -279,13 +278,12 @@ impl SourceEmitHandle {
     /// # Arguments
     ///
     /// * `source_id` - ID of the source that will use this handle
-    /// * `query_id` - ID of the query this source belongs to
+    /// * `node` - Weak reference to the source's pipeline node
     /// * `task_queue` - Task queue for submitting buffers
     /// * `stop_requested` - Shared flag indicating if the source should stop
     /// * `task_available` - Condvar to notify worker threads of new tasks
     pub(crate) fn new(
         source_id: PipelineId,
-        query_id: u64,
         node: Weak<PipelineNode>,
         task_queue: Arc<Mutex<Box<dyn TaskQueue>>>,
         stop_requested: Arc<AtomicBool>,
@@ -293,7 +291,6 @@ impl SourceEmitHandle {
     ) -> Self {
         Self {
             source_id,
-            query_id,
             node,
             task_queue,
             stop_requested,
@@ -320,7 +317,6 @@ impl SourceEmitHandle {
     /// Returns `SourceError::EmitFailed` if the buffer cannot be enqueued.
     pub fn emit(&self, buffer: Buffer) -> Result<(), SourceError> {
         let task = Task::WorkTask {
-            query_id: self.query_id,
             pipeline_id: self.source_id.clone(),
             node: self.node.clone(),
             buffer,
@@ -375,7 +371,6 @@ impl SourceEmitHandle {
     /// during next_buffer().
     pub fn signal_error(&self, error: &str) -> Result<(), SourceError> {
         let task = Task::SourceError {
-            query_id: self.query_id,
             source_id: self.source_id.clone(),
             error: error.to_string(),
         };

@@ -17,6 +17,9 @@
 //! This module provides `Engine`, a high-level API for creating, running,
 //! and shutting down the adaptive execution engine without going through FFI.
 //!
+//! The Engine layer tracks query-to-pipeline mappings, while the underlying
+//! Executor operates on a single PipelineGraph without query awareness.
+//!
 //! # Examples
 //!
 //! ```no_run
@@ -35,20 +38,28 @@
 use crate::executor::stats::{StatisticsEvent, StatisticsSender};
 use crate::executor::{ExecutionStats, Executor, ExecutorError, ExecutorHandle, QueryId};
 use crate::graph::PipelineGraph;
+use crate::pipeline::PipelineId;
+use crate::query_engine::QueryEngine;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
+use std::sync::{Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 /// High-level engine wrapping the executor with thread management.
 ///
-/// `Engine` manages the executor lifecycle: creating the executor,
-/// spawning the execution thread, submitting queries, and shutting down.
+/// `Engine` manages the executor lifecycle and tracks query-to-pipeline
+/// mappings. The executor itself only knows about a single PipelineGraph;
+/// the Engine maps QueryId → Vec<PipelineId> for stop_query support.
 pub struct Engine {
     executor_handle: Option<ExecutorHandle>,
     executor: Option<Executor>,
     executor_thread: Option<JoinHandle<ExecutionStats>>,
     next_query_id: AtomicU64,
+    /// Maps QueryId to the pipeline IDs belonging to that query.
+    queries: Mutex<HashMap<QueryId, Vec<PipelineId>>>,
+    /// Query engine for pipeline-to-query event mapping (Some when stats enabled).
+    query_engine: Option<QueryEngine>,
 }
 
 impl Engine {
@@ -66,6 +77,8 @@ impl Engine {
             executor: Some(executor),
             executor_thread: None,
             next_query_id: AtomicU64::new(1),
+            queries: Mutex::new(HashMap::new()),
+            query_engine: None,
         }
     }
 
@@ -79,19 +92,28 @@ impl Engine {
     /// Create a new engine with the specified number of worker threads and
     /// statistics collection enabled.
     pub fn with_worker_count_and_stats(worker_count: usize) -> (Self, StatsReceiver) {
-        let (tx, rx) = mpsc::channel::<StatisticsEvent>();
-        let sender = StatisticsSender::new(tx);
+        // Two channels: raw (executor → query engine) and processed (query engine → consumer)
+        let (raw_tx, raw_rx) = mpsc::channel::<StatisticsEvent>();
+        let (processed_tx, processed_rx) = mpsc::channel::<StatisticsEvent>();
+
+        let sender = StatisticsSender::new(raw_tx);
         let executor = Executor::with_worker_count_and_stats(worker_count, sender);
         let handle = executor.get_handle();
+
+        let query_engine = QueryEngine::new(raw_rx, processed_tx, handle.clone());
 
         let engine = Self {
             executor_handle: Some(handle),
             executor: Some(executor),
             executor_thread: None,
             next_query_id: AtomicU64::new(1),
+            queries: Mutex::new(HashMap::new()),
+            query_engine: Some(query_engine),
         };
 
-        let receiver = StatsReceiver { receiver: rx };
+        let receiver = StatsReceiver {
+            receiver: processed_rx,
+        };
 
         (engine, receiver)
     }
@@ -112,30 +134,88 @@ impl Engine {
 
     /// Submit a query (pipeline graph) for execution.
     ///
-    /// Returns a `QueryId` that can be used to stop the query later.
+    /// Records all pipeline IDs from the graph, deploys it to the executor,
+    /// and returns a QueryId that can be used to stop the query later.
     ///
     /// # Errors
     ///
     /// Returns `ExecutorError` if the task queue lock is poisoned.
     pub fn submit_query(&self, graph: PipelineGraph) -> Result<QueryId, ExecutorError> {
         let query_id = self.next_query_id.fetch_add(1, Ordering::SeqCst);
+
+        // Record all pipeline IDs for this query
+        let pipeline_ids = graph.get_all_pipeline_ids();
+
+        // Extract source IDs before deploying
+        let source_ids: Vec<PipelineId> = pipeline_ids
+            .iter()
+            .filter(|id| graph.is_source(id))
+            .cloned()
+            .collect();
+
+        {
+            let mut queries = self.queries.lock().unwrap();
+            queries.insert(query_id, pipeline_ids.clone());
+        }
+
+        // Register with QueryEngine if present
+        if let Some(ref qe) = self.query_engine {
+            qe.register_query(query_id, pipeline_ids, source_ids);
+        }
+
         let handle = self
             .executor_handle
             .as_ref()
             .expect("Engine not initialized");
-        handle.deploy_graph_with_query_id(query_id, graph)?;
+        handle.deploy_graph(graph)?;
         Ok(query_id)
     }
 
     /// Stop a specific query.
     ///
+    /// Looks up the pipeline IDs for the given query and enqueues
+    /// StopPipelineTask for each source pipeline via the executor.
+    ///
     /// Returns `true` if the query was found and stop was initiated.
     pub fn stop_query(&self, query_id: QueryId) -> Result<bool, ExecutorError> {
+        // Look up which pipelines belong to this query
+        let pipeline_ids = {
+            let queries = self.queries.lock().unwrap();
+            match queries.get(&query_id) {
+                Some(ids) => ids.clone(),
+                None => return Ok(false),
+            }
+        };
+
         let handle = self
             .executor_handle
             .as_ref()
             .expect("Engine not initialized");
-        handle.stop_query(query_id)
+
+        // Find which of these pipelines are sources in the current graph
+        let source_ids: Vec<PipelineId> = {
+            let graph = handle
+                .graph()
+                .read()
+                .map_err(|e| ExecutorError::TaskQueue(format!("Graph lock poisoned: {}", e)))?;
+
+            pipeline_ids
+                .iter()
+                .filter(|id| graph.is_source(id))
+                .cloned()
+                .collect()
+        };
+
+        if source_ids.is_empty() {
+            // Query has no source pipelines in the graph (may have already completed)
+            // Remove from tracking
+            let mut queries = self.queries.lock().unwrap();
+            queries.remove(&query_id);
+            return Ok(false);
+        }
+
+        handle.stop_pipelines(&source_ids)?;
+        Ok(true)
     }
 
     /// Shutdown the engine and join the executor thread.
@@ -150,7 +230,7 @@ impl Engine {
         }
 
         // Join the executor thread
-        if let Some(thread_handle) = self.executor_thread.take() {
+        let stats = if let Some(thread_handle) = self.executor_thread.take() {
             match thread_handle.join() {
                 Ok(stats) => stats,
                 Err(e) => {
@@ -160,7 +240,18 @@ impl Engine {
             }
         } else {
             ExecutionStats::default()
+        };
+
+        // Drop the executor handle to close the raw stats channel,
+        // which signals the QueryEngine processing thread to exit.
+        self.executor_handle.take();
+
+        // Stop the QueryEngine processing thread
+        if let Some(qe) = self.query_engine.take() {
+            qe.stop();
         }
+
+        stats
     }
 }
 

@@ -28,8 +28,8 @@ use common::capturing_sink::capturing_sink;
 use common::controlled_pipeline::controlled_pipeline;
 use common::controlled_source::controlled_source;
 use common::stats_collector::StatsCollector;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -127,7 +127,10 @@ fn test_multiworker_error_handling() {
         source_ctrl.inject_buffer(Buffer::new(vec![0; 64]));
     }
 
-    // Wait for the error to propagate and shutdown
+    // Wait for the error to propagate (at least one QueryTerminated event)
+    assert!(_stats.wait_for_query_terminated(1, DEFAULT_TIMEOUT));
+
+    // Now shutdown
     let exec_stats = engine.shutdown();
     assert!(exec_stats.has_errors());
     assert!(exec_stats.errors_encountered > 0);

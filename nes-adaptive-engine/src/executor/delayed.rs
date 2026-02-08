@@ -277,7 +277,6 @@ mod tests {
 
         // Submit a task with 0 delay
         let task = Task::WorkTask {
-            query_id: 0,
             pipeline_id: PipelineId::new("test"),
             node: Weak::new(),
             buffer: Buffer::new(vec![1, 2, 3]),
@@ -308,7 +307,6 @@ mod tests {
 
         // Submit a task with 50ms delay
         let task = Task::WorkTask {
-            query_id: 0,
             pipeline_id: PipelineId::new("test"),
             node: Weak::new(),
             buffer: Buffer::new(vec![1, 2, 3]),
@@ -346,7 +344,6 @@ mod tests {
 
         // Submit a task with long delay
         let task = Task::WorkTask {
-            query_id: 0,
             pipeline_id: PipelineId::new("test"),
             node: Weak::new(),
             buffer: Buffer::new(vec![1, 2, 3]),
@@ -374,13 +371,11 @@ mod tests {
 
         // Both handles should work
         let task1 = Task::WorkTask {
-            query_id: 0,
             pipeline_id: PipelineId::new("test1"),
             node: Weak::new(),
             buffer: Buffer::new(vec![1]),
         };
         let task2 = Task::WorkTask {
-            query_id: 0,
             pipeline_id: PipelineId::new("test2"),
             node: Weak::new(),
             buffer: Buffer::new(vec![2]),

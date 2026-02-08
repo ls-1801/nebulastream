@@ -185,6 +185,30 @@ pub enum StatisticsEvent {
         /// Unique identifier for the query.
         query_id: QueryId,
     },
+
+    /// Emitted when a source has been successfully started.
+    ///
+    /// This event is consumed by the QueryEngine to track source startup
+    /// progress and synthesize QueryRunning events. It is not forwarded
+    /// to consumers.
+    SourceStarted {
+        /// Worker thread that started the source.
+        worker_id: WorkerId,
+        /// Pipeline ID of the source that started.
+        source_id: PipelineId,
+    },
+
+    /// Emitted when a pipeline or source encounters a fatal execution error.
+    ///
+    /// This event is consumed by the QueryEngine to initiate per-query
+    /// termination: it looks up the query for the failed pipeline and issues
+    /// stop_pipelines() for that query's sources.
+    PipelineExecutionError {
+        /// Worker thread where the error occurred.
+        worker_id: WorkerId,
+        /// Pipeline that failed.
+        pipeline_id: PipelineId,
+    },
 }
 
 /// Handle for sending statistics events to a listener.
@@ -342,6 +366,24 @@ impl StatisticsSender {
         self.emit(StatisticsEvent::QueryTerminated {
             worker_id,
             query_id,
+        });
+    }
+
+    /// Emit a SourceStarted event.
+    #[inline]
+    pub fn source_started(&self, worker_id: WorkerId, source_id: PipelineId) {
+        self.emit(StatisticsEvent::SourceStarted {
+            worker_id,
+            source_id,
+        });
+    }
+
+    /// Emit a PipelineExecutionError event.
+    #[inline]
+    pub fn pipeline_execution_error(&self, worker_id: WorkerId, pipeline_id: PipelineId) {
+        self.emit(StatisticsEvent::PipelineExecutionError {
+            worker_id,
+            pipeline_id,
         });
     }
 }

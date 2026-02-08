@@ -20,7 +20,7 @@
 
 use crate::pipeline::{Buffer, PipelineId};
 use crate::source::{Source, SourceEmitHandle, SourceError};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;

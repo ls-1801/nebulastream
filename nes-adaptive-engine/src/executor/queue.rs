@@ -277,7 +277,6 @@ mod tests {
         // Push tasks
         queue.push(Task::Shutdown);
         queue.push(Task::EndOfStream {
-            query_id: 0,
             source_id: PipelineId::new("src"),
             pipeline_id: PipelineId::new("p1"),
         });
@@ -295,7 +294,6 @@ mod tests {
         // Push tasks
         queue.push(Task::Shutdown);
         queue.push(Task::EndOfStream {
-            query_id: 0,
             source_id: PipelineId::new("src"),
             pipeline_id: PipelineId::new("p1"),
         });
@@ -312,14 +310,12 @@ mod tests {
 
         // Push tasks in arbitrary order
         queue.push(Task::WorkTask {
-            query_id: 0,
             pipeline_id: PipelineId::new("p1"),
             node: Weak::new(),
             buffer: Buffer::new(vec![1]),
         });
         queue.push(Task::Shutdown);
         queue.push(Task::EndOfStream {
-            query_id: 0,
             source_id: PipelineId::new("src"),
             pipeline_id: PipelineId::new("p1"),
         });
@@ -339,7 +335,6 @@ mod tests {
         // Push multiple tasks
         for i in 0..10 {
             queue.push(Task::WorkTask {
-                query_id: 0,
                 pipeline_id: PipelineId::new(format!("p{}", i)),
                 node: Weak::new(),
                 buffer: Buffer::new(vec![i as u8]),

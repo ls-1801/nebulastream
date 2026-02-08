@@ -40,6 +40,7 @@ pub mod executor;
 pub mod ffi;
 pub mod graph;
 pub mod pipeline;
+pub mod query_engine;
 pub mod sequence;
 pub mod source;
 
