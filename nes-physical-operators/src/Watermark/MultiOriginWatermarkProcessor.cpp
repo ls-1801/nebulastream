@@ -19,7 +19,6 @@
 #include <string>
 #include <vector>
 #include <Identifiers/Identifiers.hpp>
-#include <Sequencing/NonBlockingMonotonicSeqQueue.hpp>
 #include <Sequencing/SequenceData.hpp>
 #include <Time/Timestamp.hpp>
 #include <Watermark/MultiOriginWatermarkProcessor.hpp>
@@ -29,13 +28,10 @@
 namespace NES
 {
 
-MultiOriginWatermarkProcessor::MultiOriginWatermarkProcessor(const std::vector<OriginId>& origins) : origins(origins)
+MultiOriginWatermarkProcessor::MultiOriginWatermarkProcessor(const std::vector<OriginId>& origins)
+    : origins(origins), trackers(origins.size())
 {
-    for (const auto& _ : origins)
-    {
-        watermarkProcessors.emplace_back(std::make_shared<Sequencing::NonBlockingMonotonicSeqQueue<uint64_t>>());
-    }
-};
+}
 
 std::shared_ptr<MultiOriginWatermarkProcessor> MultiOriginWatermarkProcessor::create(const std::vector<OriginId>& origins)
 {
@@ -49,7 +45,7 @@ Timestamp MultiOriginWatermarkProcessor::updateWatermark(Timestamp ts, SequenceD
     {
         if (origins[originIndex] == origin)
         {
-            watermarkProcessors[originIndex]->emplace(sequenceData, ts.getRawValue());
+            trackers[originIndex].wlock()->insert(sequenceData.range, ts.getRawValue());
             found = true;
         }
     }
@@ -67,17 +63,21 @@ std::string MultiOriginWatermarkProcessor::getCurrentStatus()
     std::stringstream ss;
     for (size_t originIndex = 0; originIndex < origins.size(); ++originIndex)
     {
-        ss << " id=" << origins[originIndex] << " watermark=" << watermarkProcessors[originIndex]->getCurrentValue();
+        auto locked = trackers[originIndex].rlock();
+        auto val = locked->getCompletedValue();
+        ss << " id=" << origins[originIndex] << " watermark=" << (val.has_value() ? val.value() : 0);
     }
     return ss.str();
 }
 
 Timestamp MultiOriginWatermarkProcessor::getCurrentWatermark() const
 {
-    auto minimalWatermark = UINT64_MAX;
-    for (const auto& wt : watermarkProcessors)
+    uint64_t minimalWatermark = UINT64_MAX;
+    for (const auto& tracker : trackers)
     {
-        minimalWatermark = std::min(minimalWatermark, wt->getCurrentValue());
+        auto locked = tracker.rlock();
+        auto val = locked->getCompletedValue();
+        minimalWatermark = std::min(minimalWatermark, val.has_value() ? val.value() : uint64_t(0));
     }
     return Timestamp(minimalWatermark);
 }

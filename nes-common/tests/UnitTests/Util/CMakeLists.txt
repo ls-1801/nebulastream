@@ -12,7 +12,6 @@
 
 add_nes_common_test(nes-common-tests
         "ThreadNamingTest.cpp"
-        "NonBlockingMonotonicSeqQueueTest.cpp"
         "UtilFunctionTest.cpp"
         "StringUtilTest.cpp"
         "FileUtilTest.cpp"
@@ -28,8 +27,8 @@ add_nes_test(nes-thread-test
         "ThreadTest.cpp"
 )
 
-add_nes_test(chunk-collector-test
-        "ChunkCollectorTest.cpp"
+add_nes_test(concurrent-range-completion-test
+        "ConcurrentRangeCompletionTrackerTest.cpp"
 )
 
 add_nes_test(range-completion-tracker-test

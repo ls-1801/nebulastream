@@ -14,65 +14,75 @@
 
 #include <Sequencing/RangeCompletionTracker.hpp>
 
-#include <algorithm>
-
 namespace NES
 {
 
-std::optional<std::pair<size_t, Timestamp>> RangeCompletionTracker::insert(const SequenceRange& range, Timestamp watermark)
+void RangeCompletionTrackerBase::insert(const SequenceRange& range)
 {
-    auto rootSeq = range.rootSequence();
-    auto& pending = pending_[rootSeq];
-
-    pending.ranges.insert(range);
-    pending.maxWatermark = std::max(pending.maxWatermark, watermark.getRawValue());
-
-    mergeAdjacentRanges(pending.ranges);
-
-    /// Check if the merged set contains a single range that covers [n, n+1)
-    if (pending.ranges.size() == 1)
-    {
-        const auto& merged = *pending.ranges.begin();
-        if (merged.isComplete())
-        {
-            auto result = std::make_pair(rootSeq, Timestamp(pending.maxWatermark));
-            pending_.erase(rootSeq);
-            return result;
-        }
-    }
-
-    return std::nullopt;
+    insertAndMerge(range);
 }
 
-void RangeCompletionTracker::mergeAdjacentRanges(std::set<SequenceRange>& ranges)
+size_t RangeCompletionTrackerBase::getCompletedUpTo() const
 {
-    if (ranges.size() <= 1)
+    if (ranges_.empty())
     {
-        return;
+        return 0;
+    }
+    const auto& first = *ranges_.begin();
+    if (first.start != SequenceNumber(1))
+    {
+        return 0;
+    }
+    /// If the range is [1, N+1) where N+1 is a root-level number, sequences 1..N are complete.
+    /// If the range is [1, {N, ...}) sequences 1..N-1 are complete (N is partial).
+    /// In both cases: completedUpTo = end.root() - 1.
+    return first.end.root() - 1;
+}
+
+SequenceNumber RangeCompletionTrackerBase::getHighestSeen() const
+{
+    return highestSeen_;
+}
+
+size_t RangeCompletionTrackerBase::insertAndMerge(const SequenceRange& range)
+{
+    /// Track the highest end of any inserted range
+    if (!highestSeen_.isValid() || range.end > highestSeen_)
+    {
+        highestSeen_ = range.end;
     }
 
-    bool merged = true;
-    while (merged)
+    auto [it, inserted] = ranges_.insert(range);
+    if (!inserted)
     {
-        merged = false;
-        for (auto it = ranges.begin(); it != ranges.end(); ++it)
+        return getCompletedUpTo();
+    }
+
+    /// Try to merge with predecessor
+    if (it != ranges_.begin())
+    {
+        auto prev = std::prev(it);
+        if (prev->end == it->start)
         {
-            auto next = std::next(it);
-            if (next == ranges.end())
-            {
-                break;
-            }
-            /// If current range's end equals next range's start, merge them
-            if (it->end == next->start)
-            {
-                SequenceRange combined(it->start, next->end);
-                ranges.erase(it, std::next(next));
-                ranges.insert(combined);
-                merged = true;
-                break;
-            }
+            SequenceRange merged(prev->start, it->end);
+            ranges_.erase(prev);
+            ranges_.erase(it);
+            auto [newIt, ok] = ranges_.insert(merged);
+            it = newIt;
         }
     }
+
+    /// Try to merge with successor
+    auto next = std::next(it);
+    if (next != ranges_.end() && it->end == next->start)
+    {
+        SequenceRange merged(it->start, next->end);
+        ranges_.erase(next);
+        ranges_.erase(it);
+        ranges_.insert(merged);
+    }
+
+    return getCompletedUpTo();
 }
 
 }

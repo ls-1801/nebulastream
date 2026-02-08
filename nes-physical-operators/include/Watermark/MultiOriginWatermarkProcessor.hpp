@@ -15,17 +15,21 @@
 #pragma once
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 #include <Identifiers/Identifiers.hpp>
-#include <Sequencing/NonBlockingMonotonicSeqQueue.hpp>
+#include <Sequencing/RangeCompletionTracker.hpp>
 #include <Sequencing/SequenceData.hpp>
 #include <Time/Timestamp.hpp>
 #include <Util/Common.hpp>
+#include <folly/Synchronized.h>
 
 namespace NES
 {
 
-/// @brief A multi origin version of the lock free watermark processor.
+/// @brief A multi origin version of the watermark processor.
+/// Each origin tracks range completion and associated watermark values independently.
+/// The global watermark is the minimum completed watermark across all origins.
 class MultiOriginWatermarkProcessor
 {
 public:
@@ -42,7 +46,7 @@ public:
 
 private:
     const std::vector<OriginId> origins;
-    std::vector<std::shared_ptr<Sequencing::NonBlockingMonotonicSeqQueue<uint64_t>>> watermarkProcessors;
+    mutable std::vector<folly::Synchronized<RangeCompletionTracker<uint64_t>>> trackers;
 };
 
 }
