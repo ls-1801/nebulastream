@@ -2,7 +2,18 @@
     "name": "NebulaStream Development",
     // Image tag is the hash of dependencies. Update by running: ./docker/dependency/hash_dependencies.sh
     "image": "nebulastream/nes-development:25598dd77351a71a2c9c525f457bfd79a8ae9e5d63cbc878d02c73d19744c0af",
-    "containerUser": "root",
+    "features": {
+        "ghcr.io/devcontainers/features/common-utils:2": {
+            "installZsh": false,
+            "installOhMyZsh": false,
+            "configureZshAsDefaultShell": false,
+            "username": "vscode",
+            "userUid": "automatic",
+            "userGid": "automatic"
+        }
+    },
+    "remoteUser": "vscode",
+    "updateRemoteUserUID": true,
     "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,consistency=cached",
     "customizations": {
@@ -17,11 +28,11 @@
             ],
             "settings": {
                 "cmake.generator": "Ninja",
-                "cmake.buildDirectory": "${workspaceFolder}/build",
                 "cmake.configureOnOpen": false,
+                "cmake.useCMakePresets": "always",
                 "clangd.arguments": [
                     "--background-index",
-                    "--compile-commands-dir=${workspaceFolder}/build",
+                    "--compile-commands-dir=${workspaceFolder}/build/debug",
                     "--clang-tidy",
                     "--header-insertion=iwyu"
                 ],
@@ -35,8 +46,12 @@
     "mounts": [
         "source=nebulastream-build-cache,target=/workspaces/${localWorkspaceFolderBasename}/build,type=volume"
     ],
-    "postCreateCommand": "echo 'Container ready. Run: cmake -B build -S . && cmake --build build' to build the project.",
+    "postCreateCommand": "echo 'Container ready. Configure with: cmake --preset debug' && echo 'Build with: cmake --build --preset debug'",
     "remoteEnv": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "AWS_ACCESS_KEY_ID": "${localEnv:AWS_ACCESS_KEY_ID}",
+        "AWS_SECRET_ACCESS_KEY": "${localEnv:AWS_SECRET_ACCESS_KEY}",
+        "SCCACHE_BUCKET": "${localEnv:SCCACHE_BUCKET}",
+        "SCCACHE_REGION": "${localEnv:SCCACHE_REGION}",
+        "SCCACHE_S3_USE_SSL": "${localEnv:SCCACHE_S3_USE_SSL}"
     }
 }
