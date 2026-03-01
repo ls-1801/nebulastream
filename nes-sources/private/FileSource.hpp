@@ -23,6 +23,8 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
+#include <zstd.h>
 #include <Runtime/AbstractBufferProvider.hpp>
 #include <Runtime/TupleBuffer.hpp>
 #include <Sources/Source.hpp>
@@ -32,6 +34,7 @@ namespace NES
 {
 
 static constexpr std::string_view SYSTEST_FILE_PATH_PARAMETER = "file_path";
+static constexpr std::string_view FILE_SOURCE_COMPRESSION_PARAMETER = "compression";
 
 class FileSource final : public Source
 {
@@ -61,7 +64,19 @@ public:
 private:
     std::ifstream inputFile;
     std::string filePath;
-    std::atomic<size_t> totalNumBytesRead;
+    std::string compressionType;
+    std::atomic<size_t> totalNumBytesRead{0};
+
+    /// ZSTD decompression context and buffers
+    ZSTD_DCtx* zstdContext{nullptr};
+    std::vector<char> compressedBuffer;
+    std::vector<char> decompressedBuffer;
+    size_t decompressedOffset{0};
+    size_t decompressedSize{0};
+    bool endOfCompressedStream{false};
+
+    /// Helper to decompress more data
+    bool decompressNextBlock();
 };
 
 struct ConfigParametersCSV
@@ -71,8 +86,13 @@ struct ConfigParametersCSV
         std::nullopt,
         [](const std::unordered_map<std::string, std::string>& config) { return DescriptorConfig::tryGet(FILEPATH, config); }};
 
+    static inline const DescriptorConfig::ConfigParameter<std::string> COMPRESSION{
+        std::string(FILE_SOURCE_COMPRESSION_PARAMETER),
+        std::string("none"),
+        [](const std::unordered_map<std::string, std::string>& config) { return DescriptorConfig::tryGet(COMPRESSION, config); }};
+
     static inline std::unordered_map<std::string, DescriptorConfig::ConfigParameterContainer> parameterMap
-        = DescriptorConfig::createConfigParameterContainerMap(SourceDescriptor::parameterMap, FILEPATH);
+        = DescriptorConfig::createConfigParameterContainerMap(SourceDescriptor::parameterMap, FILEPATH, COMPRESSION);
 };
 
 }
